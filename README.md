@@ -1,0 +1,1 @@
+# Sternhalma game server
