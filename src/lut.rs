@@ -1,3 +1,16 @@
+const fn calculate_indices_lattice<const N: usize>() -> [[usize; 2]; N * N] {
+    let mut indices = [[0, 0]; N * N];
+    let mut i = 0;
+    while i < N * N {
+        indices[i] = [i / N, i % N];
+        i += 1;
+    }
+    indices
+}
+
+/// Indices of a 17x17 lattice, where each index is represented as [row, column]
+pub(crate) const LATTICE_INDICES: [[usize; 2]; 289] = calculate_indices_lattice::<17>();
+
 /// Valid positions of Sternhalma board forming a star
 #[rustfmt::skip]
 pub(crate) const VALID_POSITIONS: [[usize; 2]; 121] = [
