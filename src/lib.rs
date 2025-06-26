@@ -1,100 +1,15 @@
-//! Sternhalma
+//! Sternhalma game server
 //!
-#![feature(array_try_map, generic_const_exprs)]
 
 use anyhow::{Context, Result};
 use std::{
-    fmt::Display,
+    fmt::{Debug, Display},
     ops::{Index, IndexMut},
 };
 use thiserror::Error;
 
-/// Board indices look up tables
-mod lut;
-
 /// Length of the Sternhalma board
 const BOARD_LENGTH: usize = 17;
-
-/// Axial index for the hexagonal lattice
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HexIndex(pub [usize; 2]);
-
-/// Directions in a hexagonal lattice
-#[rustfmt::skip]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HexDirection {
-        NW,  NE,
-
-    W,            E,
-
-        SW,  SE,
-}
-
-impl HexIndex {
-    pub(crate) fn next_nw(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([i.checked_sub(1)?, j]))
-    }
-
-    pub(crate) fn next_ne(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([i.checked_sub(1)?, {
-            let j_next = j + 1;
-            if j_next < BOARD_LENGTH {
-                Some(j_next)
-            } else {
-                None
-            }
-        }?]))
-    }
-
-    pub(crate) fn next_e(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([i, {
-            let j_next = j + 1;
-            if j_next < BOARD_LENGTH {
-                Some(j_next)
-            } else {
-                None
-            }
-        }?]))
-    }
-
-    pub(crate) fn next_se(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([
-            {
-                let i_next = i + 1;
-                if i_next < BOARD_LENGTH {
-                    Some(i_next)
-                } else {
-                    None
-                }
-            }?,
-            j,
-        ]))
-    }
-
-    pub(crate) fn next_sw(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([
-            {
-                let i_next = i + 1;
-                if i_next < BOARD_LENGTH {
-                    Some(i_next)
-                } else {
-                    None
-                }
-            }?,
-            j.checked_sub(1)?,
-        ]))
-    }
-
-    pub(crate) fn next_w(&self) -> Option<Self> {
-        let [i, j] = self.0;
-        Some(HexIndex([i, j.checked_sub(1)?]))
-    }
-}
 
 /// Board position
 /// `None`: Invalid position (outside of the board)
@@ -102,52 +17,52 @@ impl HexIndex {
 /// `Some(Some(piece))`: Position occupied by `piece`
 type Position<T> = Option<Option<T>>;
 
-/// Lattice to store the state of the board
+/// Sternhalma board
 #[derive(Debug)]
-struct BoardLattice<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
+pub struct Board<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
 
-impl<T> Index<HexIndex> for BoardLattice<T> {
+/// Axial index for the hexagonal lattice
+pub(crate) type HexIdx = [usize; 2];
+
+impl<T> Index<HexIdx> for Board<T> {
     type Output = Position<T>;
 
-    fn index(&self, index: HexIndex) -> &Self::Output {
-        let [i, j] = index.0;
-        assert!(j < BOARD_LENGTH, "Index out of bounds: [{i}, {j}]");
+    fn index(&self, index: HexIdx) -> &Self::Output {
+        let [i, j] = index;
+        debug_assert!(j < BOARD_LENGTH, "Index out of bounds: [{i}, {j}]");
         &self.0[i * BOARD_LENGTH + j]
     }
 }
 
-impl<T> IndexMut<HexIndex> for BoardLattice<T> {
-    fn index_mut(&mut self, index: HexIndex) -> &mut Self::Output {
-        let [i, j] = index.0;
-        assert!(j < BOARD_LENGTH, "Index out of bounds: [{i}, {j}]");
+impl<T> IndexMut<HexIdx> for Board<T> {
+    fn index_mut(&mut self, index: HexIdx) -> &mut Self::Output {
+        let [i, j] = index;
+        debug_assert!(j < BOARD_LENGTH, "Index out of bounds: [{i}, {j}]");
         &mut self.0[i * BOARD_LENGTH + j]
     }
 }
 
-/// Sternhalma board
-#[derive(Debug)]
-pub struct Board<T> {
-    /// Lattice storing the state of the board.
-    lattice: BoardLattice<T>,
+/// Board indices look up tables
+mod lut;
+
+/// Board initialization
+impl<T> Board<T> {
+    /// Creates an empty board with valid positions initialized
+    pub fn empty() -> Self {
+        let mut board = Board([const { None }; BOARD_LENGTH * BOARD_LENGTH]);
+
+        for index in lut::VALID_POSITIONS {
+            board[index] = Some(None);
+        }
+
+        board
+    }
 }
 
-impl<T> Board<T> {
-    /// Sets a piece at the specified index on the board
-    pub fn set_piece(&mut self, index: HexIndex, piece: T) -> Result<(), BoardIndexError> {
-        match &mut self.lattice[index] {
-            // Position is outside the board
-            None => Err(BoardIndexError::Invalid(index)),
-            // Position is inside the board
-            Some(pos) => match pos {
-                // Position is already occupied
-                Some(_) => Err(BoardIndexError::Occupied(index)),
-                // Position is empty, place the piece
-                None => {
-                    *pos = Some(piece);
-                    Ok(())
-                }
-            },
-        }
+impl<T> Default for Board<T> {
+    /// Default board is an empty board
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -155,271 +70,293 @@ impl<T> Board<T> {
 #[derive(Debug, Error, Clone, Copy)]
 pub enum BoardIndexError {
     #[error("Position {0:?} outside of the board")]
-    Invalid(HexIndex),
+    Invalid(HexIdx),
+    #[error("Position {0:?} is empty")]
+    Empty(HexIdx),
     #[error("Position {0:?} is already occupied")]
-    Occupied(HexIndex),
+    Occupied(HexIdx),
 }
 
-// TODO: Remove `Copy` bound
-impl<T: Copy> Board<T> {
-    /// Creates an empty board with valid positions initialized
-    pub(crate) fn empty() -> Self {
-        let mut board = Self {
-            lattice: BoardLattice([None; BOARD_LENGTH * BOARD_LENGTH]),
-        };
-        for index in lut::VALID_POSITIONS.map(HexIndex) {
-            board.lattice[index] = Some(None);
-        }
+impl<T> Board<T> {
+    /// Returns a reference to the piece at the specified index on the board
+    pub fn get(&self, idx: HexIdx) -> Result<&Option<T>, BoardIndexError> {
+        self[idx].as_ref().ok_or(BoardIndexError::Invalid(idx))
+    }
 
-        board
+    pub fn get_mut(&mut self, idx: HexIdx) -> Result<&mut Option<T>, BoardIndexError> {
+        self[idx].as_mut().ok_or(BoardIndexError::Invalid(idx))
     }
 }
 
-impl<T: Copy> Default for Board<T> {
-    /// Default board is an empty board
-    fn default() -> Self {
-        Self::empty()
+/// Directions in a hexagonal lattice
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HexDirection {
+       NW,  NE,
+
+    W,          E,
+
+       SW,  SE,
+}
+
+impl<T: Copy> Board<T> {
+    /// Nearest neighbor NW
+    fn next_nw(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [i.checked_sub(1)?, j];
+        Some((idx, self[idx]?))
+    }
+
+    /// Nearest neighbor NE
+    fn next_ne(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [
+            i.checked_sub(1)?,
+            if j + 1 < BOARD_LENGTH {
+                Some(j + 1)
+            } else {
+                None
+            }?,
+        ];
+        Some((idx, self[idx]?))
+    }
+
+    /// Nearest neighbor E
+    fn next_e(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [
+            i,
+            if j + 1 < BOARD_LENGTH {
+                Some(j + 1)
+            } else {
+                None
+            }?,
+        ];
+        Some((idx, self[idx]?))
+    }
+
+    /// Nearest neighbor SE
+    fn next_se(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [
+            if i + 1 < BOARD_LENGTH {
+                Some(i + 1)
+            } else {
+                None
+            }?,
+            j,
+        ];
+        Some((idx, self[idx]?))
+    }
+
+    /// Nearest neighbor SW
+    fn next_sw(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [
+            if i + 1 < BOARD_LENGTH {
+                Some(i + 1)
+            } else {
+                None
+            }?,
+            j.checked_sub(1)?,
+        ];
+        Some((idx, self[idx]?))
+    }
+
+    /// Nearest neighbor W
+    fn next_w(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+        let idx = [i, j.checked_sub(1)?];
+        Some((idx, self[idx]?))
+    }
+}
+
+impl<T> Board<T> {
+    /// Sets a piece at the specified index on the board
+    pub fn set_piece(&mut self, idx: HexIdx, piece: T) -> Result<(), BoardIndexError> {
+        let pos = self.get_mut(idx)?;
+        match &pos {
+            // Position is already occupied
+            Some(_) => Err(BoardIndexError::Occupied(idx)),
+            // Position is empty, place the piece
+            None => {
+                *pos = Some(piece);
+                Ok(())
+            }
+        }
     }
 }
 
 impl<T: Copy> Board<T> {
     /// Places the given piece at the specified positions on the board
-    fn place_pieces(mut self, piece: T, indices: &[HexIndex]) -> Result<Self, BoardIndexError> {
-        for &index in indices {
-            match &mut self.lattice[index] {
-                // Position is outside the board
-                None => return Err(BoardIndexError::Invalid(index)),
-                // Position is inside the board
-                Some(pos) => match pos {
-                    // Position is already occupied
-                    Some(_) => return Err(BoardIndexError::Occupied(index)),
-                    // Position is empty, place the piece
-                    None => {
-                        *pos = Some(piece);
-                    }
-                },
-            }
+    pub fn place_pieces(&mut self, indices: &[HexIdx], piece: T) -> Result<(), BoardIndexError> {
+        for &idx in indices {
+            self.set_piece(idx, piece)?;
         }
+        Ok(())
+    }
+
+    /// Builder
+    pub fn with_pieces(mut self, indices: &[HexIdx], piece: T) -> Result<Self, BoardIndexError> {
+        self.place_pieces(indices, piece)?;
         Ok(self)
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Piece {
-    Player1,
-    Player2,
-}
-
-impl Piece {
-    /// Returns the character representation of the piece
-    pub(crate) fn char(&self) -> char {
-        match self {
-            Self::Player1 => '🔵',
-            Self::Player2 => '🔴',
-        }
-    }
-}
-
-impl Display for Board<Piece> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for i in 0..BOARD_LENGTH {
-            write!(f, "{}", " ".repeat(i))?;
-            for j in 0..BOARD_LENGTH {
-                match &self.lattice[HexIndex([i, j])] {
-                    None => write!(f, "󠀠󠀠󠀠󠀠   ")?,
-                    Some(None) => write!(f, "⚫ ")?,
-                    Some(Some(piece)) => write!(f, "{} ", piece.char())?,
-                }
-            }
-            writeln!(f)?;
-        }
-        Ok(())
-    }
-}
-
-impl Board<Piece> {
-    /// Creates a new Sternhalma board with pieces placed in their starting positions
-    pub fn new() -> Result<Self, BoardIndexError> {
-        Self::empty()
-            .place_pieces(
-                Piece::Player1,
-                &lut::PLAYER1_STARTING_POSITIONS.map(HexIndex),
-            )?
-            .place_pieces(
-                Piece::Player2,
-                &lut::PLAYER2_STARTING_POSITIONS.map(HexIndex),
-            )
-    }
-}
-
+/// Possible movements
+/// - Move to an adjacent free position
+/// - Hop over an occupied position to a free position
 #[derive(Debug, Clone, Copy)]
 pub enum Movement {
-    Move(HexDirection, HexIndex),
-    Hop(HexDirection, HexIndex),
+    Move(HexIdx, HexIdx),
+    Hop(HexIdx, HexIdx),
 }
 
 /// Expands to expression that evaluates to an optional first movement from the specified index in the given direction.
 macro_rules! possible_first_move_direction {
-    ($board:ident, $direction:ident, $index:ident, $next_fn:ident) => {
-        $index
-            // Check nearest neighbor
-            .$next_fn()
-            .and_then(|idx_nn| match &$board.lattice[idx_nn]? {
-                // Position is empty, can move there
-                None => Some(Movement::Move(HexDirection::$direction, idx_nn)),
-                // Position is occupied, check if we can hop over it
-                Some(_) => idx_nn
-                    .$next_fn()
-                    .and_then(|idx_nnn| match &$board.lattice[idx_nnn]? {
-                        // Position is occupied, cannot hop over to it
-                        Some(_) => None,
-                        // Position is empty, can hop over to it
-                        None => Some(Movement::Hop(HexDirection::$direction, idx_nnn)),
-                    }),
-            })
-    };
-}
-
-/// Expands to expression that evaluates to an optional hop from the specified index in the given direction.
-macro_rules! possible_hop_direction {
-    ($board:ident, $direction:ident, $index:ident, $next_fn:ident) => {
-        $index
-            // Check nearest neighbor
-            .$next_fn()
-            .and_then(|idx_nn| match &$board.lattice[idx_nn]? {
-                // Position is empty, cannot hop over
-                None => None,
-                // Position is occupied, check if we can hop over it
-                Some(_) => idx_nn
-                    .$next_fn()
-                    .and_then(|idx_nnn| match &$board.lattice[idx_nnn]? {
-                        // Position is occupied, cannot hop over to it
-                        Some(_) => None,
-                        // Position is empty, can hop over to it
-                        None => Some(Movement::Hop(HexDirection::$direction, idx_nnn)),
-                    }),
-            })
+    ($board:ident, $index:ident, $direction:ident, $next_fn:ident) => {
+        // Check adjacent position
+        $board.$next_fn($index).and_then(|(idx, p)| match p {
+            // Free position, can move there
+            None => Some(Movement::Move($index, idx)),
+            // Occupied position, check if we can hop over it
+            Some(_) => $board.$next_fn(idx).and_then(|(idx, p)| match p {
+                // Free position, can hop over to it
+                None => Some(Movement::Hop($index, idx)),
+                // Occupied position, cannot hop over
+                Some(_) => None,
+            }),
+        })
     };
 }
 
 impl<T: Copy> Board<T> {
     /// Returns the possible moves for a piece at the given index
-    fn possible_first_movements(&self, index: HexIndex) -> [Option<Movement>; 6] {
+    fn possible_first_movements(&self, index: HexIdx) -> [Option<Movement>; 6] {
         [
             // NW
-            possible_first_move_direction!(self, NW, index, next_nw),
+            possible_first_move_direction!(self, index, NW, next_nw),
             // NE
-            possible_first_move_direction!(self, NE, index, next_ne),
+            possible_first_move_direction!(self, index, NE, next_ne),
             // E
-            possible_first_move_direction!(self, E, index, next_e),
+            possible_first_move_direction!(self, index, E, next_e),
             // SE
-            possible_first_move_direction!(self, SE, index, next_se),
+            possible_first_move_direction!(self, index, SE, next_se),
             // SW
-            possible_first_move_direction!(self, SW, index, next_sw),
+            possible_first_move_direction!(self, index, SW, next_sw),
             // W
-            possible_first_move_direction!(self, W, index, next_w),
+            possible_first_move_direction!(self, index, W, next_w),
         ]
     }
+}
 
+/// Expands to expression that evaluates to an optional hop from the specified index in the given direction.
+macro_rules! possible_hop_direction {
+    ($board:ident, $index:ident, $direction:ident, $next_fn:ident) => {
+        // Check adjacent position
+        $board.$next_fn($index).and_then(|(idx, p)| match p {
+            // Free position, cannot hop over it
+            None => None,
+            // Occupied position, check if we can hop over it
+            Some(_) => $board.$next_fn(idx).and_then(|(idx, p)| match p {
+                // Free position, can hop over to it
+                None => Some(Movement::Hop($index, idx)),
+                // Occupied position, cannot hop over
+                Some(_) => None,
+            }),
+        })
+    };
+}
+
+impl<T: Copy> Board<T> {
     /// Returns the possible hops for a piece at the given index, given the last direction of movement
-    fn possible_hops(
-        &self,
-        index: HexIndex,
-        last_direction: HexDirection,
-    ) -> [Option<Movement>; 5] {
+    fn possible_hops(&self, index: HexIdx, last_direction: HexDirection) -> [Option<Movement>; 5] {
         match last_direction {
             // NW
             HexDirection::NW => [
                 // NE
-                possible_hop_direction!(self, NE, index, next_ne),
+                possible_hop_direction!(self, index, NE, next_ne),
                 // E
-                possible_hop_direction!(self, E, index, next_e),
+                possible_hop_direction!(self, index, E, next_e),
                 // SE
-                possible_hop_direction!(self, SE, index, next_se),
+                possible_hop_direction!(self, index, SE, next_se),
                 // SW
-                possible_hop_direction!(self, SW, index, next_sw),
+                possible_hop_direction!(self, index, SW, next_sw),
                 // W
-                possible_hop_direction!(self, W, index, next_w),
+                possible_hop_direction!(self, index, W, next_w),
             ],
             // NE
             HexDirection::NE => [
                 // NW
-                possible_hop_direction!(self, NW, index, next_nw),
+                possible_hop_direction!(self, index, NW, next_nw),
                 // E
-                possible_hop_direction!(self, E, index, next_e),
+                possible_hop_direction!(self, index, E, next_e),
                 // SE
-                possible_hop_direction!(self, SE, index, next_se),
+                possible_hop_direction!(self, index, SE, next_se),
                 // SW
-                possible_hop_direction!(self, SW, index, next_sw),
+                possible_hop_direction!(self, index, SW, next_sw),
                 // W
-                possible_hop_direction!(self, W, index, next_w),
+                possible_hop_direction!(self, index, W, next_w),
             ],
             // E
             HexDirection::E => [
                 // NW
-                possible_hop_direction!(self, NW, index, next_nw),
+                possible_hop_direction!(self, index, NW, next_nw),
                 // NE
-                possible_hop_direction!(self, NE, index, next_ne),
+                possible_hop_direction!(self, index, NE, next_ne),
                 // SE
-                possible_hop_direction!(self, SE, index, next_se),
+                possible_hop_direction!(self, index, SE, next_se),
                 // SW
-                possible_hop_direction!(self, SW, index, next_sw),
+                possible_hop_direction!(self, index, SW, next_sw),
                 // W
-                possible_hop_direction!(self, W, index, next_w),
+                possible_hop_direction!(self, index, W, next_w),
             ],
             // SE
             HexDirection::SE => [
                 // NW
-                possible_hop_direction!(self, NW, index, next_nw),
+                possible_hop_direction!(self, index, NW, next_nw),
                 // NE
-                possible_hop_direction!(self, NE, index, next_ne),
+                possible_hop_direction!(self, index, NE, next_ne),
                 // E
-                possible_hop_direction!(self, E, index, next_e),
+                possible_hop_direction!(self, index, E, next_e),
                 // SW
-                possible_hop_direction!(self, SW, index, next_sw),
+                possible_hop_direction!(self, index, SW, next_sw),
                 // W
-                possible_hop_direction!(self, W, index, next_w),
+                possible_hop_direction!(self, index, W, next_w),
             ],
             // SW
             HexDirection::SW => [
                 // NW
-                possible_hop_direction!(self, NW, index, next_nw),
+                possible_hop_direction!(self, index, NW, next_nw),
                 // NE
-                possible_hop_direction!(self, NE, index, next_ne),
+                possible_hop_direction!(self, index, NE, next_ne),
                 // E
-                possible_hop_direction!(self, E, index, next_e),
+                possible_hop_direction!(self, index, E, next_e),
                 // SE
-                possible_hop_direction!(self, SE, index, next_se),
+                possible_hop_direction!(self, index, SE, next_se),
                 // W
-                possible_hop_direction!(self, W, index, next_w),
+                possible_hop_direction!(self, index, W, next_w),
             ],
             // W
             HexDirection::W => [
                 // NW
-                possible_hop_direction!(self, NW, index, next_nw),
+                possible_hop_direction!(self, index, NW, next_nw),
                 // NE
-                possible_hop_direction!(self, NE, index, next_ne),
+                possible_hop_direction!(self, index, NE, next_ne),
                 // E
-                possible_hop_direction!(self, E, index, next_e),
+                possible_hop_direction!(self, index, E, next_e),
                 // SE
-                possible_hop_direction!(self, SE, index, next_se),
+                possible_hop_direction!(self, index, SE, next_se),
                 // SW
-                possible_hop_direction!(self, SW, index, next_sw),
+                possible_hop_direction!(self, index, SW, next_sw),
             ],
         }
     }
 }
 
-impl Board<Piece> {
-    pub fn list_possible_first_movements(&self, piece: Piece) -> Vec<(HexIndex, Vec<Movement>)> {
-        self.lattice
-            .0
+impl<T: Debug + Copy + PartialEq> Board<T> {
+    pub fn list_possible_first_movements(&self, piece: T) -> Vec<(HexIdx, Vec<Movement>)> {
+        self.0
             .iter()
             .enumerate()
             .filter_map(|(i, &pos)| {
                 // If the position is valid and the piece matches, check for possible movements
                 if pos?? == piece {
-                    let index = HexIndex([i / BOARD_LENGTH, i % BOARD_LENGTH]);
+                    let index = [i / BOARD_LENGTH, i % BOARD_LENGTH];
                     let movements = self
                         .possible_first_movements(index)
                         .into_iter()
@@ -437,22 +374,65 @@ impl Board<Piece> {
             .collect()
     }
 
-    pub fn apply_movement(
-        &mut self,
-        index: HexIndex,
-        movement: Movement,
-    ) -> Result<(), BoardIndexError> {
-        match movement {
-            Movement::Move(_, target_index) => {
-                let piece = self.lattice[index];
-                self.lattice[index] = Some(None);
-                self.lattice[target_index] = piece;
+    pub fn apply_movement(&mut self, movement: Movement) -> Result<(), BoardIndexError> {
+        let (idx, idx_new) = match movement {
+            Movement::Move(idx, idx_new) => (idx, idx_new),
+            Movement::Hop(idx, idx_new) => (idx, idx_new),
+        };
+
+        let piece = self
+            .get_mut(idx)?
+            .take()
+            .ok_or(BoardIndexError::Empty(idx))?;
+        let target_pos = self.get_mut(idx_new)?;
+        match target_pos {
+            Some(_) => return Err(BoardIndexError::Occupied(idx_new)),
+            None => *target_pos = Some(piece),
+        }
+
+        Ok(())
+    }
+}
+
+/// Sternhalma board with pieces
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Piece {
+    Player1,
+    Player2,
+}
+
+impl Piece {
+    /// Returns the character representation of the piece
+    pub(crate) fn char(&self) -> char {
+        match self {
+            Self::Player1 => '🔵',
+            Self::Player2 => '🔴',
+        }
+    }
+}
+
+impl Board<Piece> {
+    /// Creates a new Sternhalma board with pieces placed in their starting positions
+    pub fn new() -> Result<Self, BoardIndexError> {
+        Self::empty()
+            .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Piece::Player1)?
+            .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Piece::Player2)
+    }
+}
+
+/// Board display
+impl Display for Board<Piece> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..BOARD_LENGTH {
+            write!(f, "{}", " ".repeat(i))?;
+            for j in 0..BOARD_LENGTH {
+                match &self[[i, j]] {
+                    None => write!(f, "󠀠󠀠󠀠󠀠   ")?,
+                    Some(None) => write!(f, "⚫ ")?,
+                    Some(Some(piece)) => write!(f, "{} ", piece.char())?,
+                }
             }
-            Movement::Hop(_, target_index) => {
-                let piece = self.lattice[index];
-                self.lattice[index] = Some(None);
-                self.lattice[target_index] = piece;
-            }
+            writeln!(f)?;
         }
         Ok(())
     }

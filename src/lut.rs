@@ -1,19 +1,8 @@
-const fn calculate_indices_lattice<const N: usize>() -> [[usize; 2]; N * N] {
-    let mut indices = [[0, 0]; N * N];
-    let mut i = 0;
-    while i < N * N {
-        indices[i] = [i / N, i % N];
-        i += 1;
-    }
-    indices
-}
-
-/// Indices of a 17x17 lattice, where each index is represented as [row, column]
-pub(crate) const LATTICE_INDICES: [[usize; 2]; 289] = calculate_indices_lattice::<17>();
+use crate::HexIdx;
 
 /// Valid positions of Sternhalma board forming a star
 #[rustfmt::skip]
-pub(crate) const VALID_POSITIONS: [[usize; 2]; 121] = [
+pub(crate) const VALID_POSITIONS: [HexIdx; 121] = [
                                            [0,12],
                                        [1,11],[1,12],
                                     [2,10],[2,11],[2,12],
@@ -35,7 +24,7 @@ pub(crate) const VALID_POSITIONS: [[usize; 2]; 121] = [
 
 /// Starting positions of player 1
 #[rustfmt::skip]
-pub(crate) const PLAYER1_STARTING_POSITIONS: [[usize; 2]; 15] = [
+pub(crate) const PLAYER1_STARTING_POSITIONS: [HexIdx; 15] = [
 [12,4],[12,5],[12,6],[12,7],[12,8],
     [13,4],[13,5],[13,6],[13,7],
        [14,4],[14,5],[14,6],
@@ -45,7 +34,7 @@ pub(crate) const PLAYER1_STARTING_POSITIONS: [[usize; 2]; 15] = [
 
 /// Starting positions of player 2
 #[rustfmt::skip]
-pub(crate) const PLAYER2_STARTING_POSITIONS: [[usize; 2]; 15] = [
+pub(crate) const PLAYER2_STARTING_POSITIONS: [HexIdx; 15] = [
             [0,12],
         [1,11],[1,12],
      [2,10],[2,11],[2,12],
