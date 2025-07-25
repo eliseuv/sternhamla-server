@@ -1,4 +1,4 @@
-use crate::HexIdx;
+use super::HexIdx;
 
 /// Valid positions of Sternhalma board forming a star
 #[rustfmt::skip]
