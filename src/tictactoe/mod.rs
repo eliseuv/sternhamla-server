@@ -150,6 +150,23 @@ impl TicTacToeGame {
         &self.status
     }
 
+    pub fn available_moves(&self) -> Vec<[usize; 2]> {
+        self.board
+            .0
+            .iter()
+            .enumerate()
+            .flat_map(|(row, cols)| {
+                cols.iter().enumerate().filter_map(move |(col, &cell)| {
+                    if cell.is_none() {
+                        Some([row, col])
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     pub fn make_move(
         &mut self,
         row: usize,
