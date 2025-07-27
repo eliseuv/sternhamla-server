@@ -32,3 +32,6 @@ A piece can be moved to an adjacent empty position or jump over an arbitrary
 number of single pieces from any player.
 
 The goal of the game is to move all one's pieces to the opposite side of the board.
+
+## Architecture
+
