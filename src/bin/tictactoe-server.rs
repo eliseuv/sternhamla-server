@@ -1,20 +1,20 @@
-use core::net::SocketAddr;
 use std::{
     collections::HashMap,
     io,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use sternhalma_server::tictactoe::{self, GameStatus, Player};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, WriteHalf},
     net::{TcpListener, TcpStream},
     sync::{Mutex, mpsc},
     time::{self, Duration},
 };
+
+use sternhalma_server::tictactoe;
 
 const LOCALHOST_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
 const NUM_PLAYERS: usize = 2;
@@ -66,7 +66,7 @@ struct ClientMessage {
     action: [usize; 2],
 }
 
-type PlayersList = Arc<Mutex<HashMap<Player, WriteHalf<TcpStream>>>>;
+type PlayersList = Arc<Mutex<HashMap<tictactoe::Player, WriteHalf<TcpStream>>>>;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -136,7 +136,7 @@ async fn client(
     // Assign player to connection
     let player = match &players_list.lock().await.keys().collect::<Vec<_>>()[..] {
         // First player
-        [] => Player::Nought,
+        [] => tictactoe::Player::Nought,
         // Second player
         [p] => p.opposite(),
         // Too many players
@@ -235,7 +235,7 @@ async fn game_loop(players_list: PlayersList, mut receiver: mpsc::Receiver<Clien
                 );
 
                 // Check if the player is the first player
-                if msg.player != Player::Nought {
+                if msg.player != tictactoe::Player::Nought {
                     log::warn!(
                         "[Server] Player {player} tried to make an opening move.",
                         player = msg.player
@@ -272,7 +272,7 @@ async fn game_loop(players_list: PlayersList, mut receiver: mpsc::Receiver<Clien
     };
 
     // Game loop
-    while let GameStatus::Playing(current_player) = state.status() {
+    while let tictactoe::GameStatus::Playing(current_player) = state.status() {
         log::debug!("[Server] Game state:\n{state}");
 
         // Send available moves to current player
