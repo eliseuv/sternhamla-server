@@ -1,27 +1,26 @@
 use std::{
     collections::HashMap,
-    io,
+    fmt::Display,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
 };
 
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, WriteHalf},
+    io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Mutex, mpsc},
-    time::{self, Duration},
+    select,
+    sync::mpsc::{Receiver, Sender, channel},
+    time,
 };
 
 use sternhalma_server::tictactoe;
 
 const LOCALHOST_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+const CHANNEL_CAPACITY: usize = 32;
 const NUM_PLAYERS: usize = 2;
 const MSG_BUF_SIZE: usize = 1024;
-
-/// Delay to wait for clients to connect
-const WAIT_CLIENTS_DELAY: Duration = Duration::from_millis(500);
 
 /// Command line arguments
 #[derive(Debug, Parser)]
@@ -36,324 +35,455 @@ struct Args {
     port: u16,
 }
 
-/// Server messages
-/// Server Thread -> Remote Client
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum ServerMessage {
-    /// Initialization message informing the client about their player
-    Connect { player: tictactoe::Player },
-    /// Inform the client that it is being disconnected
-    Disconnect,
-    /// Inform the client that it is their turn
-    YourTurn {
-        opponent_move: [usize; 2],
-        available_moves: Vec<[usize; 2]>,
-    },
-    /// Update client's game state
-    GameState { board: tictactoe::Board },
-    /// Inform the clients that the game is over and it's result
-    GameFinished { result: tictactoe::GameResult },
-    /// Inform the client about an error in the game
-    GameError { error: tictactoe::TicTacToeError },
-}
-
-/// Client messages
 /// Local Client Thread -> Server Thread
-#[derive(Debug, Deserialize)]
-struct ClientMessage {
-    player: tictactoe::Player,
-    action: [usize; 2],
+#[derive(Debug)]
+enum ClientMessage {
+    /// Inform server about a player movement
+    PlayerMovement(tictactoe::Player, [usize; 2]),
+    /// Inform server that a player has disconnected
+    Disconnect(tictactoe::Player),
 }
 
-type PlayersList = Arc<Mutex<HashMap<tictactoe::Player, WriteHalf<TcpStream>>>>;
+/// Server Thread -> Local Client Thread
+#[derive(Debug, Clone)]
+enum ServerMessage {
+    /// Inform client about the available moves for the current player
+    PlayerTurn(Vec<[usize; 2]>),
+    /// Inform client about a player movement
+    PlayerMovement(tictactoe::Player, [usize; 2]),
+    /// Inform client that the game has finished
+    GameOver(tictactoe::GameResult),
+}
+
+/// Local Client Thread -> Remote Client
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum RemoteOutMessage {
+    /// Inform client about the assigned player
+    Initialization { player: tictactoe::Player },
+    /// Inform client that it is their turn
+    YourTurn { available_moves: Vec<[usize; 2]> },
+    /// Inform client about a player movement
+    Movement {
+        player: tictactoe::Player,
+        position: [usize; 2],
+    },
+    /// Inform client that the game has finished
+    GameOver { result: tictactoe::GameResult },
+}
+
+/// Remote Client -> Local Client Thread
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum RemoteInMessage {
+    /// Receive a player movement
+    Movement { position: [usize; 2] },
+}
+
+#[derive(Debug)]
+struct Server {
+    clients: HashMap<tictactoe::Player, Sender<ServerMessage>>,
+    receiver: Receiver<ClientMessage>,
+    game: tictactoe::Game,
+}
+
+impl Server {
+    async fn new(addr: SocketAddr) -> Result<Self> {
+        log::info!("Creating server at {addr}");
+
+        // Bind TCP listener to socket
+        let listener = TcpListener::bind(addr)
+            .await
+            .context("Failed to bind listener to socket")?;
+
+        // Channel for the client threads to send messages to the server thread
+        let (sender_to_server, server_receiver) = channel::<ClientMessage>(CHANNEL_CAPACITY);
+
+        // Senders to client threads
+        let mut clients: HashMap<tictactoe::Player, Sender<ServerMessage>> =
+            HashMap::with_capacity(NUM_PLAYERS);
+
+        log::debug!("Waiting for clients to connect...");
+
+        while clients.len() < NUM_PLAYERS {
+            log::debug!(
+                "Waiting for clients... {n_conn}/{NUM_PLAYERS}",
+                n_conn = clients.len()
+            );
+            let (stream, addr) = listener
+                .accept()
+                .await
+                .context("Failed to accept client connection")?;
+            log::info!("Client connected from {addr}");
+
+            let client_id = clients.len();
+
+            let player = match clients.keys().collect::<Vec<_>>()[..] {
+                [] => tictactoe::Player::Cross,
+                [first_player] => first_player.opposite(),
+                _ => bail!("Too many clients connected"),
+            };
+
+            // Channel for the server thread to send messages to the client thread
+            let (sender_to_client, client_receiver) = channel::<ServerMessage>(CHANNEL_CAPACITY);
+
+            let client = Client {
+                id: client_id,
+                player,
+                sender: sender_to_server.clone(),
+                receiver: client_receiver,
+                stream,
+                buffer_out: Vec::with_capacity(MSG_BUF_SIZE),
+            };
+
+            tokio::spawn(async move {
+                if let Err(e) = client.run().await {
+                    log::error!("Error running client {client_id}: {e}");
+                }
+            });
+
+            clients.insert(player, sender_to_client);
+        }
+
+        let n_clients = clients.len();
+        log::info!("All clients connected. Number of clients connected: {n_clients}",);
+
+        Ok(Self {
+            clients,
+            receiver: server_receiver,
+            game: tictactoe::Game::new(),
+        })
+    }
+
+    /// Broadcast a message to all clients
+    async fn broadcast_message(&self, message: &ServerMessage) -> Result<()> {
+        log::debug!("Broadcasting message to all clients: {message:?}");
+        for (player, client) in self.clients.iter() {
+            if let Err(e) = client.send(message.clone()).await {
+                log::error!("Failed to send message to client {player}: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Send a message to a specific client
+    async fn message_client(
+        &self,
+        player: &tictactoe::Player,
+        message: ServerMessage,
+    ) -> Result<()> {
+        log::debug!("Sending message to client {player}: {message:?}");
+        if let Some(client) = self.clients.get(player) {
+            client
+                .send(message)
+                .await
+                .context("Failed to send message to client")?;
+        } else {
+            bail!("Client for player {player} not found");
+        }
+        Ok(())
+    }
+
+    async fn run(mut self) -> Result<()> {
+        log::debug!("Running server with {} clients", self.clients.len());
+
+        // Main game loop
+        while let tictactoe::GameStatus::Playing(current_player) = self.game.status() {
+            log::debug!("Current player: {current_player}");
+
+            // FIXME: Figure out why this is needed
+            // time::sleep(time::Duration::from_millis(100)).await;
+
+            // Inform the current player that it's their turn
+            let available_moves = self.game.available_moves();
+            self.message_client(current_player, ServerMessage::PlayerTurn(available_moves))
+                .await?;
+
+            // Receive messages from clients
+            match self.receiver.recv().await {
+                None => bail!("Server channel closed"),
+                Some(message) => match message {
+                    ClientMessage::PlayerMovement(player, pos) => {
+                        log::debug!("Received player movement from {player} at position {pos:?}");
+                        // Check if the player is the current player
+                        if player != *current_player {
+                            log::warn!(
+                                "Received move from {player} but expected {current_player} to play"
+                            );
+                            // TODO: Send wrong move message to client
+                            continue;
+                        }
+                        log::debug!("Player {player} move at {pos:?}");
+                        // Make the move in the game
+                        match self.game.make_move(pos) {
+                            // Valid move
+                            Ok(status) => {
+                                // Notify all clients about the move
+                                self.broadcast_message(&ServerMessage::PlayerMovement(player, pos))
+                                    .await
+                                    .context("Failed to broadcast player movement")?;
+
+                                match status {
+                                    // Game still in progress
+                                    tictactoe::GameStatus::Playing(_) => continue,
+
+                                    // Game finished
+                                    tictactoe::GameStatus::Finished(result) => {
+                                        log::info!("Game finished: {result:?}");
+                                        self.broadcast_message(&ServerMessage::GameOver(result))
+                                            .await
+                                            .context("Failed to broadcast game result")?;
+
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            // Invalid move
+                            Err(e) => {
+                                // TODO: Notify client about the error
+                                log::error!("Failed to make move: {e:?}");
+                                continue;
+                            }
+                        }
+                    }
+
+                    ClientMessage::Disconnect(player) => {
+                        log::info!("Client {player} disconnected");
+                        // Remove the client from the game
+                        self.clients.remove(&player);
+                        // If there are no more clients, exit the game loop
+                        if self.clients.is_empty() {
+                            log::info!("No more clients connected, exiting game loop");
+                            return Ok(());
+                        }
+                        // TODO: Handle disconnection properly
+                        return Ok(());
+                    }
+                },
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct Client {
+    /// Client ID
+    id: usize,
+    /// Assigned player
+    player: tictactoe::Player,
+    /// Sender for messages to the server thread
+    sender: Sender<ClientMessage>,
+    /// Receiver for messages from the server thread
+    receiver: Receiver<ServerMessage>,
+    /// Stream to remote client
+    stream: TcpStream,
+    /// Buffer for serialization of outgoing messages
+    buffer_out: Vec<u8>,
+}
+
+impl Display for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Client {} ({})", self.id, self.player)
+    }
+}
+
+impl Client {
+    /// Send a message to the remote client
+    async fn send_remote_message(&mut self, message: &RemoteOutMessage) -> Result<()> {
+        log::debug!("[{self}] Sending message to remote client:\n{message:?}");
+
+        self.buffer_out.clear();
+        ciborium::into_writer(message, &mut self.buffer_out)
+            .context("Failed to serialize message")?;
+        log::debug!(
+            "[{self}] Serialized message: {} bytes",
+            self.buffer_out.len()
+        );
+
+        self.stream
+            .write_all(&self.buffer_out)
+            .await
+            .context("Failed to send message to remote client")?;
+        self.stream
+            .flush()
+            .await
+            .context("Failed to flush message to remote client")?;
+
+        log::debug!("[{self}] Message successfully sent to remote client");
+        Ok(())
+    }
+
+    /// Handle message received from the server thread
+    async fn handle_local_message(&mut self, message: ServerMessage) -> Result<bool> {
+        log::debug!("[{self}] Local message received:\n{message:?}");
+        match message {
+            ServerMessage::PlayerMovement(player, position) => {
+                self.send_remote_message(&RemoteOutMessage::Movement { player, position })
+                    .await
+                    .context("Failed to send player movement to remote client")?;
+            }
+
+            ServerMessage::PlayerTurn(available_moves) => {
+                self.send_remote_message(&RemoteOutMessage::YourTurn { available_moves })
+                    .await
+                    .context("Failed to inform remote client that its their turn")?;
+            }
+
+            ServerMessage::GameOver(result) => {
+                self.send_remote_message(&RemoteOutMessage::GameOver { result })
+                    .await
+                    .context("Failed to inform remote client that the game has finished")?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Handle a message received from the remote client
+    async fn handle_remote_message(&mut self, message: &RemoteInMessage) -> Result<()> {
+        log::debug!("[{self}] Remote message received:\n{message:?}");
+        match message {
+            RemoteInMessage::Movement { position: pos } => self
+                .sender
+                .send(ClientMessage::PlayerMovement(self.player, *pos))
+                .await
+                .context("Unable forward player movement to server thread"),
+        }
+    }
+
+    /// Client thread
+    async fn run(mut self) -> Result<()> {
+        log::debug!("[{self}] Starting client thread");
+
+        // Send initialization message to remote client
+        self.send_remote_message(&RemoteOutMessage::Initialization {
+            player: self.player,
+        })
+        .await
+        .context("Failed to send initialization message to remote client")?;
+
+        // Buffer for incoming remote messages
+        let mut buffer_in = Vec::with_capacity(MSG_BUF_SIZE);
+
+        loop {
+            select! {
+                // Check for local message from server thread
+                message = self.receiver.recv() => {
+                    match message {
+                        Some(message) => {
+                            match self.handle_local_message(message).await {
+                                Ok(should_exit) => {
+                                    if should_exit {
+                                        log::info!("[{self}] Game finished, exiting client thread.");
+                                        self.sender.send(ClientMessage::Disconnect(self.player)).await?;
+                                        return Ok(());
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("[{self}] Failed to handle local message: {e}");
+                                }
+                            }
+                        }
+                        None => {
+                            log::info!("[{self}] Server thread channel closed, exiting client thread.");
+                            return Ok(());
+                        }
+                    }
+                }
+
+                // Check for remote message from client
+                result = self.stream.read(&mut buffer_in) => {
+                    match result {
+                        Ok(0) => {
+                            log::info!("[{self}] Remote client disconnected.");
+                            return Ok(());
+                        }
+                        Ok(n) => {
+                            match ciborium::from_reader::<RemoteInMessage, _>(&buffer_in[..n]) {
+                                Ok(message) => {
+                                    if let Err(e) = self.handle_remote_message(&message).await {
+                                        log::error!("[{self}] Failed to handle remote message: {e}");
+                                    }
+                                }
+                                Err(e) => log::error!("[{self}] Failed to decode message: {e}"),
+                            }
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(e) => log::error!("[{self}] Failed to receive remote message: {e}"),
+                    }
+                }
+            }
+        }
+
+        // Client thread loop
+        // loop {
+        //     // Check for local message
+        //     match self.receiver.try_recv() {
+        //         // Local message received
+        //         Ok(message) => match self.handle_local_message(message).await {
+        //             Ok(should_exit) => {
+        //                 if should_exit {
+        //                     log::info!("[{self}] Game finished, exiting client thread.");
+        //                     return Ok(());
+        //                 }
+        //             }
+        //             Err(e) => {
+        //                 log::error!("[{self}] Failed to handle local message: {e}");
+        //             }
+        //         },
+        //         // No local message available
+        //         Err(TryRecvError::Empty) => {}
+        //         // Failed to receive local message
+        //         Err(e) => log::error!("[{self}] Failed to receive local message: {e}"),
+        //     }
+        //     // Check for remote message
+        //     match self.stream.try_read(&mut buffer_in) {
+        //         // Remote client disconnected
+        //         Ok(0) => {
+        //             log::info!("[{self}] Remote client disconnected.");
+        //             return Ok(());
+        //         }
+        //         // Remote message successfully received
+        //         Ok(n) => match ciborium::from_reader::<RemoteInMessage, _>(&buffer_in[..n]) {
+        //             Ok(message) => {
+        //                 log::debug!("[{self}] Remote message received:\n{message:?}");
+        //                 if let Err(e) = self.handle_remote_message(&message).await {
+        //                     log::error!("[{self}] Failed to handle remote message: {e}");
+        //                 }
+        //             }
+        //             Err(e) => log::error!("[{self}] Failed to decode message: {e}"),
+        //         },
+        //         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+        //             // No remote message available
+        //         }
+        //         Err(e) => log::error!("[{self}] Failed to receive remote message: {e}"),
+        //     }
+        // }
+    }
+}
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<()> {
     // Initialize logger
     env_logger::init();
 
     // Parse command line arguments
     let args = Args::parse();
-    log::debug!("[Server] Command line arguments: {args:?}");
+    log::debug!("Command line arguments: {args:?}");
 
     let socket_addr = SocketAddr::new(args.addr, args.port);
-    log::info!("[Server] Starting server on {socket_addr}");
+    let server = Server::new(socket_addr)
+        .await
+        .inspect_err(|e| log::error!("Failed to create server: {e}"))?;
 
-    // TCP listener
-    let listener = TcpListener::bind(socket_addr).await?;
+    server
+        .run()
+        .await
+        .inspect_err(|e| log::error!("Failed to run server: {e}"))?;
 
-    // Store client connections
-    let players_list: PlayersList = Arc::new(Mutex::new(HashMap::new()));
-
-    // Channel for the client threads to communicate with the server thread
-    let (sender, receiver) = mpsc::channel::<ClientMessage>(32);
-
-    // Accept client connections
-    let mut client_id = 0;
-    while client_id < NUM_PLAYERS {
-        log::info!("[Server] Waiting for players... {client_id}/{NUM_PLAYERS} connected");
-        // Accept a new connection
-        let (stream, addr) = listener.accept().await?;
-        log::info!("[Server] Incoming connection from {addr}");
-
-        let players_list_clone = players_list.clone();
-        let sender_clone = sender.clone();
-        tokio::spawn(async move {
-            client(stream, addr, client_id, players_list_clone, sender_clone).await
-        });
-
-        client_id += 1;
-    }
-
-    // Wait for all players to connect
-    log::info!("[Server] Waiting for all players to connect...");
-    while players_list.lock().await.len() < NUM_PLAYERS {
-        time::sleep(WAIT_CLIENTS_DELAY).await;
-    }
-    log::info!("[Server] All players connected.");
-
-    game_loop(players_list, receiver).await;
-    log::trace!("[Server] Exited game loop.");
-
+    // Keep the server running for a while
+    time::sleep(time::Duration::from_secs(1)).await;
     Ok(())
-}
-
-/// Client thread
-/// TODO: Error handling
-async fn client(
-    stream: TcpStream,
-    addr: SocketAddr,
-    client_id: usize,
-    players_list: PlayersList,
-    sender: mpsc::Sender<ClientMessage>,
-) {
-    log::info!("[Client {client_id}] Handling connection from {addr}");
-
-    // Split the stream into reader and writer
-    let (mut reader, writer) = tokio::io::split(stream);
-
-    // Assign player to connection
-    let player = match &players_list.lock().await.keys().collect::<Vec<_>>()[..] {
-        // First player
-        [] => tictactoe::Player::Nought,
-        // Second player
-        [p] => p.opposite(),
-        // Too many players
-        _ => {
-            log::error!("[Client {client_id}] Too many players connected.");
-            log::info!("[Client {client_id}] Disconnecting.");
-            return;
-        }
-    };
-    log::info!("[Client {client_id}] Assigned to player {player}.");
-
-    // Insert player into players list
-    players_list.lock().await.insert(player, writer);
-
-    // Send initial message
-    message_client(&players_list, &player, ServerMessage::Connect { player }).await;
-
-    // Loop read incoming actions from client
-    let mut buffer = [0; MSG_BUF_SIZE];
-    loop {
-        match reader.read(&mut buffer).await {
-            Ok(0) => {
-                log::info!("[Client {client_id} | Player {player}] Disconnected.");
-                return;
-            }
-            Ok(n) => match serde_json::from_slice::<[usize; 2]>(&buffer[..n]) {
-                Err(e) => {
-                    log::error!(
-                        "[Client {client_id} | Player {player}] Failed to decode message: {e}"
-                    );
-                }
-                Ok(action) => {
-                    let msg = ClientMessage { player, action };
-                    log::debug!(
-                        "[Client {client_id} | Player {player}] Received action: {:?}",
-                        msg.action
-                    );
-                    if let Err(e) = sender.send(msg).await {
-                        log::error!(
-                            "[Client {client_id} | Player {player}] Failed to send message to game loop: {e}"
-                        );
-                    }
-                }
-            },
-            Err(e) => {
-                log::error!(
-                    "[Client {client_id} | Player {player}] Failed to read from socket: {e}"
-                );
-                log::info!("[Client {client_id} | Player {player}] Disconnecting.");
-                return;
-            }
-        }
-    }
-}
-
-async fn message_client(
-    players_list: &PlayersList,
-    player: &tictactoe::Player,
-    msg: ServerMessage,
-) {
-    log::debug!("[Server] Sending message to player {player}:\n{msg:?}");
-    let msg_encoded = serde_json::to_string(&msg).unwrap();
-    if let Some(writer) = players_list.lock().await.get_mut(player) {
-        if let Err(e) = writer.write_all(msg_encoded.as_bytes()).await {
-            log::error!("[Server] Failed to send message to player {player}: {e}");
-        }
-    } else {
-        log::error!("[Server] Player {player} not found in players list.");
-    }
-}
-
-async fn broadcast_message(players_list: &PlayersList, msg: ServerMessage) {
-    log::info!("[Server] Broadcasting message:\n{msg:?}");
-    let msg_encoded = serde_json::to_string(&msg).unwrap();
-    for (player, writer) in players_list.lock().await.iter_mut() {
-        log::debug!("[Server] Sending message to player {player}");
-        if let Err(e) = writer.write_all(msg_encoded.as_bytes()).await {
-            log::error!("[Server] Failed to send message to player {player}: {e}");
-        }
-    }
-}
-
-async fn game_loop(players_list: PlayersList, mut receiver: mpsc::Receiver<ClientMessage>) {
-    log::info!("[Server] Starting game...");
-    let mut state = tictactoe::Game::new();
-
-    // Wait for opening move
-    log::debug!("[Server] Waiting for opening move...");
-    let mut last_action = loop {
-        match receiver.recv().await {
-            Some(msg) => {
-                log::debug!(
-                    "[Server] Received opening move from player {}: {:?}",
-                    msg.player,
-                    msg.action
-                );
-
-                // Check if the player is the first player
-                if msg.player != tictactoe::Player::Nought {
-                    log::warn!(
-                        "[Server] Player {player} tried to make an opening move.",
-                        player = msg.player
-                    );
-                    continue;
-                }
-
-                // Make the opening move in the game state
-                match state.make_move(msg.action) {
-                    Ok(None) => {
-                        log::debug!("[Server] Opening move accepted.");
-                        break msg.action; // Exit the loop after a valid opening move
-                    }
-                    Err(e) => {
-                        log::warn!("[Server] Invalid opening move: {e:?}");
-                        message_client(
-                            &players_list,
-                            &msg.player,
-                            ServerMessage::GameError { error: e },
-                        )
-                        .await;
-                        continue;
-                    }
-                    Ok(Some(_)) => {
-                        panic!("Game should not finish on opening move");
-                    }
-                }
-            }
-            None => {
-                log::info!("[Server] No more messages from players. Exiting game loop.");
-                return;
-            }
-        }
-    };
-
-    // Game loop
-    while let tictactoe::GameStatus::Playing(current_player) = state.status() {
-        log::debug!("[Server] Game state:\n{state}");
-
-        // Send available moves to current player
-        log::info!("[Server] Sending available moves to player {current_player}...");
-        let available_moves = state.available_moves();
-        message_client(
-            &players_list,
-            current_player,
-            ServerMessage::YourTurn {
-                opponent_move: last_action,
-                available_moves,
-            },
-        )
-        .await;
-
-        // Wait for a player action
-        log::debug!("[Server] Waiting for player {current_player} turn...");
-        if let Some(msg) = receiver.recv().await {
-            log::debug!(
-                "[Server] Received action from player {}: {:?}",
-                msg.player,
-                msg.action
-            );
-
-            // Check if the player is the current player
-            if msg.player != *current_player {
-                log::warn!(
-                    "[Server] Player {player} tried to play out of turn.",
-                    player = msg.player
-                );
-                continue;
-            }
-
-            // Store the last action for potential future use
-            last_action = msg.action;
-
-            // Make the move in the game state
-            match state.make_move(msg.action) {
-                Ok(None) => {
-                    log::debug!(
-                        "[Server] Player {player} made move ({row}, {col}).",
-                        player = msg.player,
-                        row = msg.action[0],
-                        col = msg.action[1]
-                    );
-                }
-                Ok(Some(result)) => {
-                    log::info!("[Server] Game finished with result: {result:?}");
-                    log::debug!("[Server] Game state:\n{state}");
-                    // Broadcast result
-                    broadcast_message(&players_list, ServerMessage::GameFinished { result }).await;
-                    // Broadcast final game state
-                    broadcast_message(
-                        &players_list,
-                        ServerMessage::GameState {
-                            board: state.board().clone(),
-                        },
-                    )
-                    .await;
-                    break;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[Server] Player {player} made an invalid move: {e:?}",
-                        player = msg.player
-                    );
-                    message_client(
-                        &players_list,
-                        &msg.player,
-                        ServerMessage::GameError { error: e },
-                    )
-                    .await;
-                    continue;
-                }
-            }
-        } else {
-            log::info!("[Server] No more messages from players. Exiting game loop.");
-            return;
-        }
-    }
-
-    // Disconnect all clients
-    broadcast_message(&players_list, ServerMessage::Disconnect).await;
 }

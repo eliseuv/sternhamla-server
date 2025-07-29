@@ -134,6 +134,7 @@ pub enum TicTacToeError {
 pub struct Game {
     board: Board,
     status: GameStatus,
+    history: Vec<[usize; 2]>, // History of moves made
 }
 
 impl Game {
@@ -141,8 +142,10 @@ impl Game {
         Self {
             // Empty board
             board: Board::new(),
-            // Nought starts the game
-            status: GameStatus::Playing(Player::Nought),
+            // Cross starts
+            status: GameStatus::Playing(Player::Cross),
+            // History of moves
+            history: Vec::new(),
         }
     }
 
@@ -171,31 +174,29 @@ impl Game {
             .collect()
     }
 
-    pub fn make_move(
-        &mut self,
-        [row, col]: [usize; 2],
-    ) -> Result<Option<GameResult>, TicTacToeError> {
-        if let GameStatus::Playing(current_player) = self.status {
-            // Check bounds
-            if row >= 3 || col >= 3 {
-                return Err(TicTacToeError::OutOfBounds([row, col]));
+    pub fn make_move(&mut self, [row, col]: [usize; 2]) -> Result<GameStatus, TicTacToeError> {
+        match self.status {
+            GameStatus::Playing(player) => {
+                // Check bounds
+                if row >= 3 || col >= 3 {
+                    return Err(TicTacToeError::OutOfBounds([row, col]));
+                }
+                // Check occupancy
+                if self.board.0[row][col].is_some() {
+                    return Err(TicTacToeError::OccupiedCell([row, col]));
+                }
+                // Make the move
+                self.board.0[row][col] = Some(player);
+                self.history.push([row, col]);
+                // Update game status
+                self.status = if let Some(result) = self.board.check() {
+                    GameStatus::Finished(result)
+                } else {
+                    GameStatus::Playing(player.opposite())
+                };
+                Ok(self.status)
             }
-            // Check occupancy
-            if self.board.0[row][col].is_some() {
-                return Err(TicTacToeError::OccupiedCell([row, col]));
-            }
-            // Make the move
-            self.board.0[row][col] = Some(current_player);
-            // Check game
-            if let Some(result) = self.board.check() {
-                self.status = GameStatus::Finished(result);
-                Ok(Some(result))
-            } else {
-                self.status = GameStatus::Playing(current_player.opposite());
-                Ok(None)
-            }
-        } else {
-            Err(TicTacToeError::GameFinished)
+            GameStatus::Finished(_) => Err(TicTacToeError::GameFinished),
         }
     }
 }
