@@ -124,7 +124,7 @@ pub enum GameStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TicTacToeError {
+pub enum GameError {
     OutOfBounds([usize; 2]),
     OccupiedCell([usize; 2]),
     GameFinished,
@@ -174,16 +174,16 @@ impl Game {
             .collect()
     }
 
-    pub fn make_move(&mut self, [row, col]: [usize; 2]) -> Result<GameStatus, TicTacToeError> {
+    pub fn make_move(&mut self, [row, col]: [usize; 2]) -> Result<GameStatus, GameError> {
         match self.status {
             GameStatus::Playing(player) => {
                 // Check bounds
                 if row >= 3 || col >= 3 {
-                    return Err(TicTacToeError::OutOfBounds([row, col]));
+                    return Err(GameError::OutOfBounds([row, col]));
                 }
                 // Check occupancy
                 if self.board.0[row][col].is_some() {
-                    return Err(TicTacToeError::OccupiedCell([row, col]));
+                    return Err(GameError::OccupiedCell([row, col]));
                 }
                 // Make the move
                 self.board.0[row][col] = Some(player);
@@ -196,7 +196,7 @@ impl Game {
                 };
                 Ok(self.status)
             }
-            GameStatus::Finished(_) => Err(TicTacToeError::GameFinished),
+            GameStatus::Finished(_) => Err(GameError::GameFinished),
         }
     }
 }
