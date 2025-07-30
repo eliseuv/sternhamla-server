@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -12,15 +13,16 @@ use tokio::{
     net::{TcpListener, TcpStream},
     select,
     sync::mpsc::{Receiver, Sender, channel},
-    time,
+    time::{self, timeout},
 };
 
 use sternhalma_server::tictactoe;
 
-const LOCALHOST_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+const LOCALHOST_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const CHANNEL_CAPACITY: usize = 32;
 const NUM_PLAYERS: usize = 2;
 const MSG_BUF_SIZE: usize = 1024;
+const TIMEOUT_DURATION: Duration = Duration::from_secs(10);
 
 /// Command line arguments
 #[derive(Debug, Parser)]
@@ -70,6 +72,8 @@ enum RemoteOutMessage {
     },
     /// Inform client that the game has finished
     GameOver { result: tictactoe::GameResult },
+    /// Inform client about a game error
+    GameError { error: tictactoe::GameError },
 }
 
 /// Remote Client -> Local Client Thread
@@ -110,9 +114,9 @@ impl Server {
                 "Waiting for clients... {n_conn}/{NUM_PLAYERS}",
                 n_conn = clients.len()
             );
-            let (stream, addr) = listener
-                .accept()
+            let (stream, addr) = timeout(TIMEOUT_DURATION, listener.accept())
                 .await
+                .context("Timeout on client connection")?
                 .context("Failed to accept client connection")?;
             log::info!("Client connected from {addr}");
 
@@ -191,9 +195,6 @@ impl Server {
         while let tictactoe::GameStatus::Playing(current_player) = self.game.status() {
             log::debug!("Current player: {current_player}");
 
-            // FIXME: Figure out why this is needed
-            // time::sleep(time::Duration::from_millis(100)).await;
-
             // Inform the current player that it's their turn
             let available_moves = self.game.available_moves();
             self.message_client(current_player, ServerMessage::PlayerTurn(available_moves))
@@ -201,7 +202,7 @@ impl Server {
 
             // Receive messages from clients
             match self.receiver.recv().await {
-                None => bail!("Server channel closed"),
+                None => bail!("All clients dropped, exiting game loop"),
                 Some(message) => match message {
                     ClientMessage::PlayerMovement(player, pos) => {
                         log::debug!("Received player movement from {player} at position {pos:?}");
@@ -297,10 +298,6 @@ impl Client {
         self.buffer_out.clear();
         ciborium::into_writer(message, &mut self.buffer_out)
             .context("Failed to serialize message")?;
-        log::debug!(
-            "[{self}] Serialized message: {} bytes",
-            self.buffer_out.len()
-        );
 
         self.stream
             .write_all(&self.buffer_out)
@@ -376,7 +373,7 @@ impl Client {
                             match self.handle_local_message(message).await {
                                 Ok(should_exit) => {
                                     if should_exit {
-                                        log::info!("[{self}] Game finished, exiting client thread.");
+                                        log::info!("[{self}] Shutting down client thread");
                                         self.sender.send(ClientMessage::Disconnect(self.player)).await?;
                                         return Ok(());
                                     }
@@ -391,14 +388,19 @@ impl Client {
                             return Ok(());
                         }
                     }
-                }
+                },
 
                 // Check for remote message from client
                 result = self.stream.read(&mut buffer_in) => {
+                    log::debug!("[{self}] Remote message received");
                     match result {
                         Ok(0) => {
-                            log::info!("[{self}] Remote client disconnected.");
-                            return Ok(());
+                            log::info!("[{self}] Remote client disconnected");
+                            // Inform server thread about the disconnection
+                            return self.sender
+                                .send(ClientMessage::Disconnect(self.player))
+                                .await
+                                .context("Failed to inform server thread about disconnection")
                         }
                         Ok(n) => {
                             match ciborium::from_reader::<RemoteInMessage, _>(&buffer_in[..n]) {
@@ -410,57 +412,11 @@ impl Client {
                                 Err(e) => log::error!("[{self}] Failed to decode message: {e}"),
                             }
                         }
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                         Err(e) => log::error!("[{self}] Failed to receive remote message: {e}"),
                     }
                 }
             }
         }
-
-        // Client thread loop
-        // loop {
-        //     // Check for local message
-        //     match self.receiver.try_recv() {
-        //         // Local message received
-        //         Ok(message) => match self.handle_local_message(message).await {
-        //             Ok(should_exit) => {
-        //                 if should_exit {
-        //                     log::info!("[{self}] Game finished, exiting client thread.");
-        //                     return Ok(());
-        //                 }
-        //             }
-        //             Err(e) => {
-        //                 log::error!("[{self}] Failed to handle local message: {e}");
-        //             }
-        //         },
-        //         // No local message available
-        //         Err(TryRecvError::Empty) => {}
-        //         // Failed to receive local message
-        //         Err(e) => log::error!("[{self}] Failed to receive local message: {e}"),
-        //     }
-        //     // Check for remote message
-        //     match self.stream.try_read(&mut buffer_in) {
-        //         // Remote client disconnected
-        //         Ok(0) => {
-        //             log::info!("[{self}] Remote client disconnected.");
-        //             return Ok(());
-        //         }
-        //         // Remote message successfully received
-        //         Ok(n) => match ciborium::from_reader::<RemoteInMessage, _>(&buffer_in[..n]) {
-        //             Ok(message) => {
-        //                 log::debug!("[{self}] Remote message received:\n{message:?}");
-        //                 if let Err(e) = self.handle_remote_message(&message).await {
-        //                     log::error!("[{self}] Failed to handle remote message: {e}");
-        //                 }
-        //             }
-        //             Err(e) => log::error!("[{self}] Failed to decode message: {e}"),
-        //         },
-        //         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-        //             // No remote message available
-        //         }
-        //         Err(e) => log::error!("[{self}] Failed to receive remote message: {e}"),
-        //     }
-        // }
     }
 }
 
@@ -476,14 +432,9 @@ async fn main() -> Result<()> {
     let socket_addr = SocketAddr::new(args.addr, args.port);
     let server = Server::new(socket_addr)
         .await
-        .inspect_err(|e| log::error!("Failed to create server: {e}"))?;
+        .context("Failed to create server")?;
 
-    server
-        .run()
-        .await
-        .inspect_err(|e| log::error!("Failed to run server: {e}"))?;
+    server.run().await.context("Failed to run server")?;
 
-    // Keep the server running for a while
-    time::sleep(time::Duration::from_secs(1)).await;
     Ok(())
 }
