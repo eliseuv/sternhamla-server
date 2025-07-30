@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::atomic::{self, AtomicUsize},
     time::Duration,
 };
 
@@ -9,11 +10,11 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     select,
     sync::mpsc::{Receiver, Sender, channel},
-    time::{self, timeout},
+    time::timeout,
 };
 
 use sternhalma_server::tictactoe;
@@ -23,6 +24,9 @@ const CHANNEL_CAPACITY: usize = 32;
 const NUM_PLAYERS: usize = 2;
 const MSG_BUF_SIZE: usize = 1024;
 const TIMEOUT_DURATION: Duration = Duration::from_secs(10);
+
+/// Unique client ID generator
+static NEXT_CLIENT_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Command line arguments
 #[derive(Debug, Parser)]
@@ -120,7 +124,7 @@ impl Server {
                 .context("Failed to accept client connection")?;
             log::info!("Client connected from {addr}");
 
-            let client_id = clients.len();
+            let client_id = NEXT_CLIENT_ID.fetch_add(1, atomic::Ordering::Relaxed);
 
             let player = match clients.keys().collect::<Vec<_>>()[..] {
                 [] => tictactoe::Player::Cross,
