@@ -13,8 +13,15 @@ pub enum Player {
     Cross,
 }
 
+/// Total number of players
+pub const NUM_PLAYERS: usize = std::mem::variant_count::<Player>();
+
+/// List of all players
+pub const PLAYERS_LIST: [Player; 2] = [Player::Cross, Player::Nought];
+
 impl Player {
-    pub fn opposite(&self) -> Self {
+    /// Get the opponent of a given player
+    pub const fn opposite(&self) -> Self {
         match self {
             Player::Nought => Player::Cross,
             Player::Cross => Player::Nought,

@@ -1,5 +1,6 @@
 //! Sternhalma game server
 //!
+#![feature(variant_count)]
 
 /// Simple Tic-Tac-Toe implementation for reference
 pub mod tictactoe;
