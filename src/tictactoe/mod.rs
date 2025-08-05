@@ -1,25 +1,33 @@
 //! Tic-Tac-Toe
 //! Basic implementation of a very simple game in order to facilitate experimentation on architecture
 
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    ops::{Index, IndexMut},
+};
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Player {
-    #[serde(rename = "o")]
-    Nought,
     #[serde(rename = "x")]
     Cross,
+    #[serde(rename = "o")]
+    Nought,
 }
-
-/// Total number of players
-pub const NUM_PLAYERS: usize = std::mem::variant_count::<Player>();
 
 /// List of all players
 pub const PLAYERS_LIST: [Player; 2] = [Player::Cross, Player::Nought];
 
 impl Player {
+    pub const fn variants() -> [Player; 2] {
+        [Player::Cross, Player::Nought]
+    }
+
+    pub const fn count() -> usize {
+        Self::variants().len()
+    }
+
     /// Get the opponent of a given player
     pub const fn opposite(&self) -> Self {
         match self {
@@ -35,6 +43,16 @@ impl Display for Player {
             Player::Nought => write!(f, "⭕"),
             Player::Cross => write!(f, "❌"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Position(pub [usize; 2]);
+
+impl Position {
+    pub fn is_valid(&self) -> bool {
+        let [i, j] = self.0;
+        (i <= 3) && (j <= 3)
     }
 }
 
@@ -72,6 +90,22 @@ impl Board {
 impl Default for Board {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Index<Position> for Board {
+    type Output = Option<Player>;
+
+    fn index(&self, index: Position) -> &Self::Output {
+        let [i, j] = index.0;
+        &self.0[i][j]
+    }
+}
+
+impl IndexMut<Position> for Board {
+    fn index_mut(&mut self, index: Position) -> &mut Self::Output {
+        let [i, j] = index.0;
+        &mut self.0[i][j]
     }
 }
 
@@ -132,8 +166,8 @@ pub enum GameStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameError {
-    OutOfBounds([usize; 2]),
-    OccupiedCell([usize; 2]),
+    OutOfBounds(Position),
+    OccupiedCell(Position),
     GameFinished,
 }
 
@@ -141,7 +175,7 @@ pub enum GameError {
 pub struct Game {
     board: Board,
     status: GameStatus,
-    history: Vec<[usize; 2]>, // History of moves made
+    history: Vec<Position>, // History of moves made
 }
 
 impl Game {
@@ -160,11 +194,11 @@ impl Game {
         &self.board
     }
 
-    pub fn status(&self) -> &GameStatus {
-        &self.status
+    pub fn status(&self) -> GameStatus {
+        self.status
     }
 
-    pub fn available_moves(&self) -> Vec<[usize; 2]> {
+    pub fn available_moves(&self) -> Vec<Position> {
         self.board
             .0
             .iter()
@@ -172,7 +206,7 @@ impl Game {
             .flat_map(|(row, cols)| {
                 cols.iter().enumerate().filter_map(move |(col, &cell)| {
                     if cell.is_none() {
-                        Some([row, col])
+                        Some(Position([row, col]))
                     } else {
                         None
                     }
@@ -181,20 +215,20 @@ impl Game {
             .collect()
     }
 
-    pub fn make_move(&mut self, [row, col]: [usize; 2]) -> Result<GameStatus, GameError> {
+    pub fn make_move(&mut self, position: Position) -> Result<GameStatus, GameError> {
         match self.status {
             GameStatus::Playing(player) => {
                 // Check bounds
-                if row >= 3 || col >= 3 {
-                    return Err(GameError::OutOfBounds([row, col]));
+                if !position.is_valid() {
+                    return Err(GameError::OutOfBounds(position));
                 }
                 // Check occupancy
-                if self.board.0[row][col].is_some() {
-                    return Err(GameError::OccupiedCell([row, col]));
+                if self.board[position].is_some() {
+                    return Err(GameError::OccupiedCell(position));
                 }
                 // Make the move
-                self.board.0[row][col] = Some(player);
-                self.history.push([row, col]);
+                self.board[position] = Some(player);
+                self.history.push(position);
                 // Update game status
                 self.status = if let Some(result) = self.board.check() {
                     GameStatus::Finished(result)

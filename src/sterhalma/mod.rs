@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
     ops::{Index, IndexMut},
@@ -19,7 +20,7 @@ type Position<T> = Option<Option<T>>;
 pub struct Board<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
 
 /// Axial index for the hexagonal lattice
-pub(crate) type HexIdx = [usize; 2];
+pub type HexIdx = [usize; 2];
 
 impl<T> Index<HexIdx> for Board<T> {
     type Output = Position<T>;
@@ -400,15 +401,26 @@ impl<T> Board<T> {
 }
 
 /// Sternhalma board with pieces
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Piece {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Player {
     Player1,
     Player2,
 }
 
-impl Piece {
+impl Player {
+    /// List all player variants
+    pub const fn variants() -> [Player; 2] {
+        [Player::Player1, Player::Player2]
+    }
+
+    /// Number of players
+    pub const fn count() -> usize {
+        Player::variants().len()
+    }
+
     /// Returns the character representation of the piece
-    pub(crate) fn char(&self) -> char {
+    pub fn char(&self) -> char {
         match self {
             Self::Player1 => '🔵',
             Self::Player2 => '🔴',
@@ -416,17 +428,19 @@ impl Piece {
     }
 }
 
-impl Board<Piece> {
+impl Board<Player> {
     /// Creates a new Sternhalma board with pieces placed in their starting positions
-    pub fn two_players() -> Result<Self, BoardIndexError> {
+    pub fn new() -> Self {
         Self::empty()
-            .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Piece::Player1)?
-            .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Piece::Player2)
+            .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Player::Player1)
+            .expect("Player 1 positions are valid")
+            .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Player::Player2)
+            .expect("Player 2 positions are valid")
     }
 }
 
 /// Board display
-impl Display for Board<Piece> {
+impl Display for Board<Player> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for i in 0..BOARD_LENGTH {
             write!(f, "{}", " ".repeat(i))?;
@@ -444,40 +458,53 @@ impl Display for Board<Piece> {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum GameState {
+pub enum GameStatus {
     /// Which piece is currently playing and the last movement made
-    Playing(Piece, Option<Movement>),
+    Playing(Player),
     /// Game finished
-    Finished(Option<Piece>),
+    Finished(Player),
 }
 
 #[derive(Debug)]
 pub struct Game {
-    board: Board<Piece>,
-    state: GameState,
+    /// Board state
+    board: Board<Player>,
+    /// Game status
+    status: GameStatus,
+    /// Movement history
+    history: Vec<Movement>,
 }
 
 impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{}", self.board)?;
-        match self.state {
-            GameState::Playing(piece, _) => write!(f, "Current player: {}", piece.char()),
-            GameState::Finished(winner) => {
+        match self.status {
+            GameStatus::Playing(player) => write!(f, "Current player: {}", player.char())?,
+            GameStatus::Finished(winner) => {
                 write!(f, "Game finished!")?;
-                match winner {
-                    Some(piece) => write!(f, "Winner: {}", piece.char()),
-                    None => write!(f, "It's a draw!"),
-                }
+                write!(f, "Winner: {}", winner.char())?;
             }
         }
+        Ok(())
     }
 }
 
 impl Game {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            board: Board::two_players().context("Failed to initialize board")?,
-            state: GameState::Playing(Piece::Player1, None),
-        })
+    pub fn new() -> Self {
+        Self {
+            board: Board::new(),
+            status: GameStatus::Playing(Player::Player1),
+            history: Vec::new(),
+        }
+    }
+
+    pub fn status(&self) -> GameStatus {
+        self.status
+    }
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        Self::new()
     }
 }
