@@ -10,20 +10,21 @@ use thiserror::Error;
 const BOARD_LENGTH: usize = 17;
 
 /// Board position
-/// `None`: Invalid position (outside of the board)
-/// `Some(None)`: Empty valid position
-/// `Some(Some(piece))`: Position occupied by `piece`
-type Position<T> = Option<Option<T>>;
+/// `None`: Empty position
+/// `Some(piece)`: Position occupied by `piece`
+type Position<T> = Option<T>;
 
 /// Sternhalma board
 #[derive(Debug)]
-pub struct Board<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
+pub struct Board<T>([Option<Position<T>>; BOARD_LENGTH * BOARD_LENGTH]);
 
 /// Axial index for the hexagonal lattice
 pub type HexIdx = [usize; 2];
 
+/// Board indexing
+/// Returns `Option<Position<T>>` with `None` meaning an index outside of the board
 impl<T> Index<HexIdx> for Board<T> {
-    type Output = Position<T>;
+    type Output = Option<Position<T>>;
 
     fn index(&self, index: HexIdx) -> &Self::Output {
         let [i, j] = index;
@@ -97,15 +98,47 @@ pub enum HexDirection {
        SW,  SE,
 }
 
-impl<T: Copy> Board<T> {
+impl HexDirection {
+    /// List all possible hexagonal grid directions
+    pub const fn variants() -> [HexDirection; 6] {
+        [
+            HexDirection::NW,
+            HexDirection::NE,
+            HexDirection::W,
+            HexDirection::E,
+            HexDirection::SW,
+            HexDirection::SE,
+        ]
+    }
+}
+
+impl<T> Board<T> {
+    /// Nearest neighbor in a given direction
+    fn nearest_neighbor(
+        &self,
+        idx: HexIdx,
+        direction: HexDirection,
+    ) -> Option<(HexIdx, &Option<T>)> {
+        match direction {
+            HexDirection::NW => self.next_nw(idx),
+            HexDirection::NE => self.next_ne(idx),
+            HexDirection::W => self.next_w(idx),
+            HexDirection::E => self.next_e(idx),
+            HexDirection::SW => self.next_sw(idx),
+            HexDirection::SE => self.next_se(idx),
+        }
+    }
+
     /// Nearest neighbor NW
-    fn next_nw(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_nw(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [i.checked_sub(1)?, j];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 
     /// Nearest neighbor NE
-    fn next_ne(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_ne(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [
             i.checked_sub(1)?,
             if j + 1 < BOARD_LENGTH {
@@ -114,11 +147,12 @@ impl<T: Copy> Board<T> {
                 None
             }?,
         ];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 
     /// Nearest neighbor E
-    fn next_e(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_e(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [
             i,
             if j + 1 < BOARD_LENGTH {
@@ -127,11 +161,12 @@ impl<T: Copy> Board<T> {
                 None
             }?,
         ];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 
     /// Nearest neighbor SE
-    fn next_se(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_se(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [
             if i + 1 < BOARD_LENGTH {
                 Some(i + 1)
@@ -140,11 +175,12 @@ impl<T: Copy> Board<T> {
             }?,
             j,
         ];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 
     /// Nearest neighbor SW
-    fn next_sw(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_sw(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [
             if i + 1 < BOARD_LENGTH {
                 Some(i + 1)
@@ -153,13 +189,14 @@ impl<T: Copy> Board<T> {
             }?,
             j.checked_sub(1)?,
         ];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 
     /// Nearest neighbor W
-    fn next_w(&self, [i, j]: HexIdx) -> Option<(HexIdx, Option<T>)> {
+    #[inline(always)]
+    fn next_w(&self, [i, j]: HexIdx) -> Option<(HexIdx, &Option<T>)> {
         let idx = [i, j.checked_sub(1)?];
-        Some((idx, self[idx]?))
+        Some((idx, self[idx].as_ref()?))
     }
 }
 
@@ -195,166 +232,11 @@ impl<T: Copy> Board<T> {
     }
 }
 
-/// Possible movements
-/// - Move to an adjacent free position
-/// - Hop over an occupied position to a free position
-#[derive(Debug, Clone, Copy)]
-pub enum Movement {
-    Move(HexIdx, HexIdx),
-    Hop(HexIdx, HexIdx),
-}
-
-/// Expands to expression that evaluates to an optional first movement from the specified index in the given direction.
-macro_rules! first_movement_from_index_to_direction {
-    ($board:ident, $index:ident, $direction:ident, $next_fn:ident) => {
-        // Check adjacent position
-        $board.$next_fn($index).and_then(|(idx, p)| match p {
-            // Free position, can move there
-            None => Some(Movement::Move($index, idx)),
-            // Occupied position, check if we can hop over it
-            Some(_) => $board.$next_fn(idx).and_then(|(idx, p)| match p {
-                // Free position, can hop over to it
-                None => Some(Movement::Hop($index, idx)),
-                // Occupied position, cannot hop over
-                Some(_) => None,
-            }),
-        })
-    };
-}
-
-impl<T: Copy> Board<T> {
-    /// Returns the possible moves for a piece at the given index
-    fn first_movements_from(&self, index: HexIdx) -> [Option<Movement>; 6] {
-        [
-            // NW
-            first_movement_from_index_to_direction!(self, index, NW, next_nw),
-            // NE
-            first_movement_from_index_to_direction!(self, index, NE, next_ne),
-            // E
-            first_movement_from_index_to_direction!(self, index, E, next_e),
-            // SE
-            first_movement_from_index_to_direction!(self, index, SE, next_se),
-            // SW
-            first_movement_from_index_to_direction!(self, index, SW, next_sw),
-            // W
-            first_movement_from_index_to_direction!(self, index, W, next_w),
-        ]
-    }
-}
-
-/// Expands to expression that evaluates to an optional hop from the specified index in the given direction.
-macro_rules! hop_from_index_to_direction {
-    ($board:ident, $index:ident, $direction:ident, $next_fn:ident) => {
-        // Check adjacent position
-        $board.$next_fn($index).and_then(|(idx, p)| match p {
-            // Free position, cannot hop over it
-            None => None,
-            // Occupied position, check if we can hop over it
-            Some(_) => $board.$next_fn(idx).and_then(|(idx, p)| match p {
-                // Free position, can hop over to it
-                None => Some(Movement::Hop($index, idx)),
-                // Occupied position, cannot hop over
-                Some(_) => None,
-            }),
-        })
-    };
-}
-
-impl<T: Copy> Board<T> {
-    /// Returns the possible hops for a piece at the given index, given the last direction of movement
-    fn available_hops_from(
-        &self,
-        index: HexIdx,
-        last_direction: HexDirection,
-    ) -> [Option<Movement>; 5] {
-        match last_direction {
-            // NW
-            HexDirection::NW => [
-                // NE
-                hop_from_index_to_direction!(self, index, NE, next_ne),
-                // E
-                hop_from_index_to_direction!(self, index, E, next_e),
-                // SE
-                hop_from_index_to_direction!(self, index, SE, next_se),
-                // SW
-                hop_from_index_to_direction!(self, index, SW, next_sw),
-                // W
-                hop_from_index_to_direction!(self, index, W, next_w),
-            ],
-            // NE
-            HexDirection::NE => [
-                // NW
-                hop_from_index_to_direction!(self, index, NW, next_nw),
-                // E
-                hop_from_index_to_direction!(self, index, E, next_e),
-                // SE
-                hop_from_index_to_direction!(self, index, SE, next_se),
-                // SW
-                hop_from_index_to_direction!(self, index, SW, next_sw),
-                // W
-                hop_from_index_to_direction!(self, index, W, next_w),
-            ],
-            // E
-            HexDirection::E => [
-                // NW
-                hop_from_index_to_direction!(self, index, NW, next_nw),
-                // NE
-                hop_from_index_to_direction!(self, index, NE, next_ne),
-                // SE
-                hop_from_index_to_direction!(self, index, SE, next_se),
-                // SW
-                hop_from_index_to_direction!(self, index, SW, next_sw),
-                // W
-                hop_from_index_to_direction!(self, index, W, next_w),
-            ],
-            // SE
-            HexDirection::SE => [
-                // NW
-                hop_from_index_to_direction!(self, index, NW, next_nw),
-                // NE
-                hop_from_index_to_direction!(self, index, NE, next_ne),
-                // E
-                hop_from_index_to_direction!(self, index, E, next_e),
-                // SW
-                hop_from_index_to_direction!(self, index, SW, next_sw),
-                // W
-                hop_from_index_to_direction!(self, index, W, next_w),
-            ],
-            // SW
-            HexDirection::SW => [
-                // NW
-                hop_from_index_to_direction!(self, index, NW, next_nw),
-                // NE
-                hop_from_index_to_direction!(self, index, NE, next_ne),
-                // E
-                hop_from_index_to_direction!(self, index, E, next_e),
-                // SE
-                hop_from_index_to_direction!(self, index, SE, next_se),
-                // W
-                hop_from_index_to_direction!(self, index, W, next_w),
-            ],
-            // W
-            HexDirection::W => [
-                // NW
-                hop_from_index_to_direction!(self, index, NW, next_nw),
-                // NE
-                hop_from_index_to_direction!(self, index, NE, next_ne),
-                // E
-                hop_from_index_to_direction!(self, index, E, next_e),
-                // SE
-                hop_from_index_to_direction!(self, index, SE, next_se),
-                // SW
-                hop_from_index_to_direction!(self, index, SW, next_sw),
-            ],
-        }
-    }
-}
-
-impl<T: Copy + PartialEq> Board<T> {
+impl<T: PartialEq> Board<T> {
     /// Iterate on the indices of the pieces of a given player
-    pub fn iter_indices(&self, player: T) -> impl Iterator<Item = HexIdx> {
-        self.0.iter().enumerate().filter_map(move |(i, &pos)| {
-            if pos?? == player {
+    pub fn iter_player_indices(&self, player: &T) -> impl Iterator<Item = HexIdx> {
+        self.0.iter().enumerate().filter_map(move |(i, pos)| {
+            if pos.as_ref()?.as_ref()? == player {
                 let idx = [i / BOARD_LENGTH, i % BOARD_LENGTH];
                 Some(idx)
             } else {
@@ -362,37 +244,162 @@ impl<T: Copy + PartialEq> Board<T> {
             }
         })
     }
+}
 
-    pub fn possible_first_moves(&self, player: T) -> impl Iterator<Item = (HexIdx, Vec<Movement>)> {
-        self.iter_indices(player).filter_map(|idx| {
-            let movements = self
-                .first_movements_from(idx)
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-            if movements.is_empty() {
-                None
-            } else {
-                Some((idx, movements))
-            }
-        })
+/// Possible movements
+#[derive(Debug)]
+pub enum Movement {
+    /// Single move to adjacent cell
+    /// Starting index and adjacent destination index
+    Move { from: HexIdx, to: HexIdx },
+    /// Multiple hops
+    /// Path taken while hopping
+    Hops { path: Vec<HexIdx> },
+}
+
+#[derive(Debug)]
+pub struct MovementEndpoints {
+    from: HexIdx,
+    to: HexIdx,
+}
+
+impl Movement {
+    pub fn endpoints(&self) -> MovementEndpoints {
+        match self {
+            Movement::Move { from, to } => MovementEndpoints {
+                from: *from,
+                to: *to,
+            },
+            Movement::Hops { path } => MovementEndpoints {
+                from: *path.first().unwrap(),
+                to: *path.last().unwrap(),
+            },
+        }
     }
+}
+
+impl<T: Debug> Board<T> {
+    /// Iterate over all indices that are possible to hop over to starting from `idx`
+    pub fn available_hops_from(&self, idx: HexIdx) -> impl Iterator<Item = HexIdx> {
+        HexDirection::variants()
+            // For all directions
+            .into_iter()
+            .filter_map(move |direction| {
+                // Check if nearest neighbor is valid index
+                let (nn_idx, nn_pos) = self.nearest_neighbor(idx, direction)?;
+                // Check if it is occupied
+                match nn_pos {
+                    // Nearest neighbor is empty => Unable to hop over it
+                    None => None,
+                    // Nearest neighbor is occupied
+                    Some(_) => {
+                        // Check if next nearest neighbor is valid index
+                        let (nnn_idx, nnn_pos) = self.nearest_neighbor(nn_idx, direction)?;
+                        match nnn_pos {
+                            // Next nearest neighbor is occupied => Unable to hop
+                            Some(_) => None,
+                            // Next nearest neighbor is empty => We can hop over there
+                            None => Some(nnn_idx),
+                        }
+                    }
+                }
+            })
+    }
+
+    /// Recursive helper to find all possible hop paths starting from a given position.
+    fn collect_hop_paths_from(&self, path: &[HexIdx]) -> Vec<Movement> {
+        let mut all_hop_movements = Vec::new();
+
+        for next_hop_idx in self.available_hops_from(*path.last().unwrap()) {
+            // Ensure we don't hop back to a previously visited cell within the same path.
+            // This prevents infinite loops and ensures unique paths for a game like Chinese Checkers.
+            if !path.contains(&next_hop_idx) {
+                let mut next_path = path.to_vec().clone();
+                next_path.push(next_hop_idx);
+
+                // This new path is itself a valid complete hop movement
+                all_hop_movements.push(Movement::Hops {
+                    path: next_path.clone(),
+                });
+
+                // Recursively find further hops from the new position
+                let further_movements = self.collect_hop_paths_from(&next_path);
+                all_hop_movements.extend(further_movements);
+            }
+        }
+        all_hop_movements
+    }
+
+    /// List all available movements for a piece at index `idx`
+    pub fn available_movements_from(&self, idx: HexIdx) -> impl Iterator<Item = Movement> {
+        HexDirection::variants()
+            .into_iter()
+            // For all directions
+            .filter_map(move |direction| {
+                // Check if nearest neighbor is valid index
+                let (nn_idx, nn_pos) = self.nearest_neighbor(idx, direction)?;
+                // Check if it is occupied
+                match nn_pos {
+                    // Nearest neighbor is empty => We can move there
+                    None => Some(vec![Movement::Move {
+                        from: idx,
+                        to: nn_idx,
+                    }]),
+                    // Nearest neighbor is occupied
+                    Some(_) => {
+                        // Check if next nearest neighbor is valid index
+                        let (nnn_idx, nnn_pos) = self.nearest_neighbor(nn_idx, direction)?;
+                        match nnn_pos {
+                            // Next nearest neighbor is occupied
+                            Some(_) => None,
+                            None => {
+                                // Next nearest neighbor is empty => We can hop over there
+                                // The first hop itself is a valid movement.
+                                let initial_hop = vec![idx, nnn_idx];
+
+                                // Find all further hops starting from this first hop destination
+                                // These are paths that extend beyond the initial hop
+                                let further_hop_movements =
+                                    self.collect_hop_paths_from(&initial_hop);
+
+                                Some(
+                                    [Movement::Hops { path: initial_hop }]
+                                        .into_iter()
+                                        .chain(further_hop_movements)
+                                        .collect(),
+                                )
+                            }
+                        }
+                    }
+                }
+            })
+            .flatten()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MovementError {
+    /// Movement made after the game is finished
+    GameFinished,
+    /// Invalid starting position
+    InvalidStart(BoardIndexError),
+    /// Invalid finish position
+    InvalidFinish(BoardIndexError),
+    /// Movement made out of turn
+    OutOfTurn,
 }
 
 impl<T> Board<T> {
     pub fn apply_movement(&mut self, movement: Movement) -> Result<(), BoardIndexError> {
-        let (idx, idx_new) = match movement {
-            Movement::Move(idx, idx_new) => (idx, idx_new),
-            Movement::Hop(idx, idx_new) => (idx, idx_new),
-        };
+        let points = movement.endpoints();
 
         let piece = self
-            .get_mut(idx)?
+            .get_mut(points.from)?
             .take()
-            .ok_or(BoardIndexError::Empty(idx))?;
-        let target_pos = self.get_mut(idx_new)?;
+            .ok_or(BoardIndexError::Empty(points.from))?;
+        let target_pos = self.get_mut(points.to)?;
         match target_pos {
-            Some(_) => return Err(BoardIndexError::Occupied(idx_new)),
+            Some(_) => return Err(BoardIndexError::Occupied(points.to)),
             None => *target_pos = Some(piece),
         }
 
@@ -401,7 +408,7 @@ impl<T> Board<T> {
 }
 
 /// Sternhalma board with pieces
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Player {
     Player1,
@@ -419,11 +426,19 @@ impl Player {
         Player::variants().len()
     }
 
-    /// Returns the character representation of the piece
-    pub fn char(&self) -> char {
+    pub const fn opponent(&self) -> Self {
         match self {
-            Self::Player1 => '🔵',
-            Self::Player2 => '🔴',
+            Player::Player1 => Player::Player2,
+            Player::Player2 => Player::Player1,
+        }
+    }
+}
+
+impl Display for Player {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Player1 => write!(f, "🔵"),
+            Self::Player2 => write!(f, "🔴"),
         }
     }
 }
@@ -448,7 +463,7 @@ impl Display for Board<Player> {
                 match &self[[i, j]] {
                     None => write!(f, "󠀠󠀠󠀠󠀠   ")?,
                     Some(None) => write!(f, "⚫ ")?,
-                    Some(Some(piece)) => write!(f, "{} ", piece.char())?,
+                    Some(Some(piece)) => write!(f, "{piece} ")?,
                 }
             }
             writeln!(f)?;
@@ -479,10 +494,10 @@ impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{}", self.board)?;
         match self.status {
-            GameStatus::Playing(player) => write!(f, "Current player: {}", player.char())?,
+            GameStatus::Playing(player) => write!(f, "Current player: {player}")?,
             GameStatus::Finished(winner) => {
                 write!(f, "Game finished!")?;
-                write!(f, "Winner: {}", winner.char())?;
+                write!(f, "Winner: {winner}")?;
             }
         }
         Ok(())
@@ -498,8 +513,69 @@ impl Game {
         }
     }
 
+    pub fn board(&self) -> &Board<Player> {
+        &self.board
+    }
+
     pub fn status(&self) -> GameStatus {
         self.status
+    }
+
+    pub fn history(&self) -> &[Movement] {
+        &self.history
+    }
+
+    // pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
+    //     if let GameStatus::Playing(player) = self.status {
+    //         self.board
+    //             .iter_player_indices(&player)
+    //             .flat_map(|idx| self.board.available_movements_from(idx))
+    //     } else {
+    //         todo!()
+    //     }
+    // }
+
+    pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, MovementError> {
+        match self.status {
+            GameStatus::Finished(_) => Err(MovementError::GameFinished),
+            GameStatus::Playing(current_player) => {
+                // Extract endpoints
+                let points = movement.endpoints();
+
+                let player = self
+                    .board
+                    .get_mut(points.from)
+                    .map_err(MovementError::InvalidStart)?
+                    .take()
+                    .ok_or(MovementError::InvalidStart(BoardIndexError::Empty(
+                        points.from,
+                    )))?;
+
+                if player != current_player {
+                    return Err(MovementError::OutOfTurn);
+                }
+
+                // Check destination
+                let pos_to = self
+                    .board
+                    .get_mut(points.to)
+                    .map_err(MovementError::InvalidFinish)?;
+                if pos_to.is_some() {
+                    return Err(MovementError::InvalidFinish(BoardIndexError::Occupied(
+                        points.to,
+                    )));
+                }
+
+                // Apply movement
+                *pos_to = Some(player);
+
+                // Update game status
+                // TODO: Check if game is finished
+                self.status = GameStatus::Playing(current_player.opponent());
+
+                Ok(self.status)
+            }
+        }
     }
 }
 

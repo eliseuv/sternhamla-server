@@ -1,7 +1,5 @@
 use std::fmt::Display;
 
-use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Circle,
@@ -150,7 +148,7 @@ pub enum GameStatus {
 
 #[derive(Debug)]
 pub struct Game {
-    board: Board,
-    available: Vec<Piece>,
-    status: GameStatus,
+    _board: Board,
+    _available: Vec<Piece>,
+    _status: GameStatus,
 }
