@@ -4,27 +4,35 @@ use std::{
     fmt::{Debug, Display},
     ops::{Index, IndexMut},
 };
-use thiserror::Error;
 
 /// Length of the Sternhalma board
 const BOARD_LENGTH: usize = 17;
 
-/// Board position
-/// `None`: Empty position
-/// `Some(piece)`: Position occupied by `piece`
-type Position<T> = Option<T>;
+/// Board position:
+/// `None`: Invalid position (outside of the board)
+/// `Some(None)`: Valid position.Empty.
+/// `Some(Some(_))`: Valid position. Occupied
+pub type Position<T> = Option<Option<T>>;
 
 /// Sternhalma board
 #[derive(Debug)]
-pub struct Board<T>([Option<Position<T>>; BOARD_LENGTH * BOARD_LENGTH]);
+pub struct Board<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
 
 /// Axial index for the hexagonal lattice
 pub type HexIdx = [usize; 2];
 
+// TODO: Function that calculates distance between two axial indices on the haxagonal lattice
+pub fn distance(a: HexIdx, b: HexIdx) -> usize {
+    // Using the formula for distance in a hexagonal grid
+    ((a[0] as isize - b[0] as isize).abs()
+        + (a[1] as isize - b[1] as isize).abs()
+        + ((a[0] as isize - b[0] as isize) - (a[1] as isize - b[1] as isize)).abs()) as usize
+}
+
 /// Board indexing
 /// Returns `Option<Position<T>>` with `None` meaning an index outside of the board
 impl<T> Index<HexIdx> for Board<T> {
-    type Output = Option<Position<T>>;
+    type Output = Position<T>;
 
     fn index(&self, index: HexIdx) -> &Self::Output {
         let [i, j] = index;
@@ -65,25 +73,18 @@ impl<T> Default for Board<T> {
     }
 }
 
-/// Errors that can occur when accessing the board
-#[derive(Debug, Error, Clone, Copy)]
-pub enum BoardIndexError {
-    #[error("Position {0:?} outside of the board")]
-    Invalid(HexIdx),
-    #[error("Position {0:?} is empty")]
-    Empty(HexIdx),
-    #[error("Position {0:?} is already occupied")]
-    Occupied(HexIdx),
-}
+/// Error when trying to access a board index that is outside of the board
+#[derive(Debug, Clone, Copy)]
+pub struct InvalidBoardIndex(HexIdx);
 
 impl<T> Board<T> {
     /// Returns a reference to the piece at the specified index on the board
-    pub fn get(&self, idx: &HexIdx) -> Result<&Option<T>, BoardIndexError> {
-        self[*idx].as_ref().ok_or(BoardIndexError::Invalid(*idx))
+    pub fn get(&self, idx: &HexIdx) -> Result<&Option<T>, InvalidBoardIndex> {
+        self[*idx].as_ref().ok_or(InvalidBoardIndex(*idx))
     }
 
-    pub fn get_mut(&mut self, idx: &HexIdx) -> Result<&mut Option<T>, BoardIndexError> {
-        self[*idx].as_mut().ok_or(BoardIndexError::Invalid(*idx))
+    pub fn get_mut(&mut self, idx: &HexIdx) -> Result<&mut Option<T>, InvalidBoardIndex> {
+        self[*idx].as_mut().ok_or(InvalidBoardIndex(*idx))
     }
 }
 
@@ -200,13 +201,24 @@ impl<T> Board<T> {
     }
 }
 
+/// Error when trying to place a piece on the board
+#[derive(Debug, Clone, Copy)]
+pub enum PiecePlacementError {
+    /// Trying to place a piece on an invalid position
+    InvalidIndex(HexIdx),
+    /// Trying to place a piece on an occupied position
+    Occupied(HexIdx),
+}
+
 impl<T> Board<T> {
     /// Sets a piece at the specified index on the board
-    pub fn set_piece(&mut self, idx: HexIdx, piece: T) -> Result<(), BoardIndexError> {
-        let pos = self.get_mut(&idx)?;
-        match &pos {
+    pub fn set_piece(&mut self, idx: HexIdx, piece: T) -> Result<(), PiecePlacementError> {
+        let pos = self
+            .get_mut(&idx)
+            .map_err(|InvalidBoardIndex(idx)| PiecePlacementError::InvalidIndex(idx))?;
+        match pos {
             // Position is already occupied
-            Some(_) => Err(BoardIndexError::Occupied(idx)),
+            Some(_) => Err(PiecePlacementError::Occupied(idx)),
             // Position is empty, place the piece
             None => {
                 *pos = Some(piece);
@@ -218,7 +230,11 @@ impl<T> Board<T> {
 
 impl<T: Copy> Board<T> {
     /// Places the given piece at the specified positions on the board
-    pub fn place_pieces(&mut self, indices: &[HexIdx], piece: T) -> Result<(), BoardIndexError> {
+    pub fn place_pieces(
+        &mut self,
+        indices: &[HexIdx],
+        piece: T,
+    ) -> Result<(), PiecePlacementError> {
         for &idx in indices {
             self.set_piece(idx, piece)?;
         }
@@ -226,17 +242,21 @@ impl<T: Copy> Board<T> {
     }
 
     /// Builder
-    pub fn with_pieces(mut self, indices: &[HexIdx], piece: T) -> Result<Self, BoardIndexError> {
+    pub fn with_pieces(
+        mut self,
+        indices: &[HexIdx],
+        piece: T,
+    ) -> Result<Self, PiecePlacementError> {
         self.place_pieces(indices, piece)?;
         Ok(self)
     }
 }
 
-impl<T: PartialEq> Board<T> {
+impl<T: Copy + PartialEq> Board<T> {
     /// Iterate on the indices of the pieces of a given player
-    pub fn iter_player_indices(&self, player: &T) -> impl Iterator<Item = HexIdx> {
+    pub fn iter_player_indices(&self, player: T) -> impl Iterator<Item = HexIdx> {
         self.0.iter().enumerate().filter_map(move |(i, pos)| {
-            if pos.as_ref()?.as_ref()? == player {
+            if pos.as_ref()?.as_ref()? == &player {
                 let idx = [i / BOARD_LENGTH, i % BOARD_LENGTH];
                 Some(idx)
             } else {
@@ -250,11 +270,56 @@ impl<T: PartialEq> Board<T> {
 #[derive(Debug)]
 pub enum Movement {
     /// Single move to adjacent cell
-    /// Starting index and adjacent destination index
     Move { from: HexIdx, to: HexIdx },
     /// Multiple hops
     /// Path taken while hopping
     Hops { path: Vec<HexIdx> },
+}
+
+impl Movement {
+    /// Check if the movement contains a specific index
+    pub fn contains(&self, idx: &HexIdx) -> bool {
+        match self {
+            Movement::Move { from, to } => from == idx || to == idx,
+            Movement::Hops { path } => path.contains(idx),
+        }
+    }
+}
+
+impl Board<Player> {
+    /// Print the board with the current movement highlighted
+    pub fn print_movement(&self, movement: &Movement) {
+        let indices = movement.get_indices();
+        for i in 0..BOARD_LENGTH {
+            print!("{}", " ".repeat(i));
+            for j in 0..BOARD_LENGTH {
+                let idx = [i, j];
+                if movement.contains(&idx) {
+                    match &self[idx] {
+                        None => print!("󠀠󠀠󠀠󠀠   "),
+                        Some(None) => {
+                            if idx == indices.to {
+                                print!("🟡 ");
+                            } else {
+                                print!("🟠 ");
+                            }
+                        }
+                        Some(Some(piece)) => match piece {
+                            Player::Player1 => print!("🟣 "),
+                            Player::Player2 => print!("🟤 "),
+                        },
+                    }
+                } else {
+                    match &self[[i, j]] {
+                        None => print!("󠀠󠀠󠀠󠀠   "),
+                        Some(None) => print!("⚫ "),
+                        Some(Some(piece)) => print!("{piece} "),
+                    }
+                }
+            }
+            println!();
+        }
+    }
 }
 
 impl<T> Board<T> {
@@ -356,12 +421,12 @@ impl<T> Board<T> {
     }
 }
 
-#[derive(Debug)]
-pub enum MovementValidationError {
-    /// One of the indices is outside the board
-    InvalidIndex(HexIdx),
+#[derive(Debug, Clone, Copy)]
+pub enum MovementError {
     /// Initial position is empty
     EmptyInit,
+    /// One of the indices is outside the board
+    InvalidIndex(HexIdx),
     /// One of the indices is occupied
     Occupied(HexIdx),
     /// The hopping sequence is too short
@@ -370,47 +435,50 @@ pub enum MovementValidationError {
 
 impl<T> Board<T> {
     /// Check if all intermediate indices of the movement are valid
-    pub fn validate_movement(&self, movement: &Movement) -> Result<(), MovementValidationError> {
+    pub fn validate_movement<'a>(
+        &self,
+        movement: &'a Movement,
+    ) -> Result<&'a Movement, MovementError> {
         match movement {
             Movement::Move { from, to } => {
                 // Check starting position
                 self.get(from)
-                    .map_err(|_| MovementValidationError::InvalidIndex(*from))?
+                    .map_err(|_| MovementError::InvalidIndex(*from))?
                     .as_ref()
-                    .ok_or(MovementValidationError::EmptyInit)?;
+                    .ok_or(MovementError::EmptyInit)?;
 
                 // Check if the destination position is empty
                 if self
                     .get(to)
-                    .map_err(|_| MovementValidationError::InvalidIndex(*from))?
+                    .map_err(|_| MovementError::InvalidIndex(*from))?
                     .as_ref()
                     .is_some()
                 {
-                    return Err(MovementValidationError::Occupied(*to));
+                    return Err(MovementError::Occupied(*to));
                 }
 
-                Ok(())
+                Ok(movement)
             }
             Movement::Hops { path } => {
                 // Check starting position
                 let start = path
                     .first()
-                    .ok_or(MovementValidationError::ShortHopping(path.len()))?;
+                    .ok_or(MovementError::ShortHopping(path.len()))?;
                 self.get(start)
-                    .map_err(|_| MovementValidationError::InvalidIndex(*start))?
+                    .map_err(|_| MovementError::InvalidIndex(*start))?
                     .as_ref()
-                    .ok_or(MovementValidationError::EmptyInit)?;
+                    .ok_or(MovementError::EmptyInit)?;
 
                 // Check all other indices in the path
                 path.get(1..)
-                    .ok_or(MovementValidationError::ShortHopping(path.len()))?
+                    .ok_or(MovementError::ShortHopping(path.len()))?
                     .iter()
                     .find_map(|idx| {
                         self.get(idx)
-                            .map_err(|_| MovementValidationError::InvalidIndex(*idx))
+                            .map_err(|_| MovementError::InvalidIndex(*idx))
                             .and_then(|pos| {
                                 if pos.is_some() {
-                                    Err(MovementValidationError::Occupied(*idx))
+                                    Err(MovementError::Occupied(*idx))
                                 } else {
                                     Ok(())
                                 }
@@ -418,7 +486,7 @@ impl<T> Board<T> {
                             .err()
                     })
                     .map(Err)
-                    .unwrap_or(Ok(()))
+                    .unwrap_or(Ok(movement))
             }
         }
     }
@@ -448,20 +516,36 @@ impl Movement {
 }
 
 impl<T> Board<T> {
-    pub fn apply_movement(&mut self, movement: &Movement) -> Result<(), BoardIndexError> {
-        let points = movement.get_indices();
-
+    pub fn apply_movement(&mut self, indices: &MovementIndices) -> Result<(), MovementError> {
         let piece = self
-            .get_mut(&points.from)?
+            .get_mut(&indices.from)
+            .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?
             .take()
-            .ok_or(BoardIndexError::Empty(points.from))?;
-        let target_pos = self.get_mut(&points.to)?;
+            .ok_or(MovementError::EmptyInit)?;
+        let target_pos = self
+            .get_mut(&indices.to)
+            .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?;
         match target_pos {
-            Some(_) => return Err(BoardIndexError::Occupied(points.to)),
-            None => *target_pos = Some(piece),
+            // Target position is occupied
+            Some(_) => {
+                // Place it back to the original position
+                *self.get_mut(&indices.from).unwrap() = Some(piece);
+                // Return error
+                Err(MovementError::Occupied(indices.to))
+            }
+            None => {
+                // Make movement
+                *target_pos = Some(piece);
+                Ok(())
+            }
         }
+    }
 
-        Ok(())
+    /// Unsafe apply movement without checking for errors
+    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) {
+        let piece = self.get_mut(&indices.from).unwrap().take().unwrap();
+        let target_pos = self.get_mut(&indices.to).unwrap();
+        *target_pos = Some(piece);
     }
 }
 
@@ -544,8 +628,6 @@ pub struct Game {
     board: Board<Player>,
     /// Game status
     status: GameStatus,
-    /// Movement history
-    history: Vec<Movement>,
 }
 
 impl Display for Game {
@@ -562,16 +644,15 @@ impl Display for Game {
     }
 }
 
+/// Error that can occur during game operations
 #[derive(Debug, Clone, Copy)]
-pub enum MovementError {
-    /// Movement made after the game is finished
-    GameFinished,
-    /// Invalid starting position
-    InvalidStart(BoardIndexError),
-    /// Invalid finish position
-    InvalidFinish(BoardIndexError),
+pub enum GameError {
+    /// Movement error
+    Movement(MovementError),
     /// Movement made out of turn
     OutOfTurn,
+    /// Movement made after the game is finished
+    GameFinished,
 }
 
 impl Game {
@@ -579,7 +660,6 @@ impl Game {
         Self {
             board: Board::new(),
             status: GameStatus::Playing(Player::Player1),
-            history: Vec::new(),
         }
     }
 
@@ -591,60 +671,66 @@ impl Game {
         self.status
     }
 
-    pub fn history(&self) -> &[Movement] {
-        &self.history
+    pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
+        match self.status {
+            GameStatus::Finished(_) => todo!(),
+            GameStatus::Playing(player) => self
+                .board
+                .iter_player_indices(player)
+                .flat_map(move |idx| self.board.available_movements_from(idx)),
+        }
     }
 
-    // pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
-    //     if let GameStatus::Playing(player) = self.status {
-    //         self.board
-    //             .iter_player_indices(&player)
-    //             .flat_map(|idx| self.board.available_movements_from(idx))
-    //     } else {
-    //         todo!()
-    //     }
-    // }
-
-    pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, MovementError> {
+    pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, GameError> {
         match self.status {
-            GameStatus::Finished(_) => Err(MovementError::GameFinished),
+            GameStatus::Finished(_) => Err(GameError::GameFinished),
             GameStatus::Playing(current_player) => {
-                // Extract endpoints
-                let points = movement.get_indices();
-
-                let player = self
+                // Check if the movement is made by the current player
+                let indices = movement.get_indices();
+                if self
                     .board
-                    .get_mut(&points.from)
-                    .map_err(MovementError::InvalidStart)?
-                    .take()
-                    .ok_or(MovementError::InvalidStart(BoardIndexError::Empty(
-                        points.from,
-                    )))?;
-
-                if player != current_player {
-                    return Err(MovementError::OutOfTurn);
+                    .get(&indices.from)
+                    .map_err(|InvalidBoardIndex(idx)| {
+                        GameError::Movement(MovementError::InvalidIndex(idx))
+                    })?
+                    .as_ref()
+                    != Some(&current_player)
+                {
+                    return Err(GameError::OutOfTurn);
                 }
 
-                // Check destination
-                let pos_to = self
-                    .board
-                    .get_mut(&points.to)
-                    .map_err(MovementError::InvalidFinish)?;
-                if pos_to.is_some() {
-                    return Err(MovementError::InvalidFinish(BoardIndexError::Occupied(
-                        points.to,
-                    )));
-                }
+                // Check if the movement is valid
+                self.board
+                    .validate_movement(movement)
+                    .map_err(GameError::Movement)?;
 
-                // Apply movement
-                *pos_to = Some(player);
+                // Apply the movement to the board
+                self.board.unsafe_apply_movement(&indices);
 
                 // Update game status
-                // TODO: Check if game is finished
-                self.status = GameStatus::Playing(current_player.opponent());
+                self.status = self.updade_status();
 
                 Ok(self.status)
             }
+        }
+    }
+
+    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) -> GameStatus {
+        // Unsafe apply movement without checking for errors
+        self.board.unsafe_apply_movement(indices);
+
+        // Update game status
+        self.status = self.updade_status();
+
+        self.status
+    }
+
+    /// Update the game status based on current state of the game
+    /// TODO: Check if game is finished
+    fn updade_status(&self) -> GameStatus {
+        match self.status {
+            GameStatus::Finished(_) => self.status,
+            GameStatus::Playing(player) => GameStatus::Playing(player.opponent()),
         }
     }
 }

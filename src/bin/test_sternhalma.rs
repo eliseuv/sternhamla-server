@@ -6,21 +6,23 @@ const N_TURNS: usize = 8;
 
 fn main() {
     let mut game = Game::new();
-    println!("{board}", board = game.board());
+    println!("{game}");
 
     let mut rng = Xoshiro256PlusPlus::from_os_rng();
 
     for _ in 0..N_TURNS {
-        if let GameStatus::Playing(player) = game.status() {
-            let movement = game
-                .board()
-                .iter_player_indices(&player)
-                .flat_map(|idx| game.board().available_movements_from(idx))
-                .choose(&mut rng)
-                .unwrap();
-
-            game.apply_movement(&movement).unwrap();
-            println!("{board}", board = game.board());
+        if let GameStatus::Playing(_) = game.status() {
+            let movement = game.iter_available_moves().choose(&mut rng).unwrap();
+            match game.board().validate_movement(&movement) {
+                Err(e) => panic!("{e:?}"),
+                Ok(movement) => {
+                    game.board().print_movement(movement);
+                    let indices = movement.get_indices();
+                    game.unsafe_apply_movement(&indices);
+                }
+            }
+        } else {
+            break;
         }
     }
 }
