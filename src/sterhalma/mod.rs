@@ -268,7 +268,7 @@ impl<T: Copy + PartialEq> Board<T> {
 
 /// Movements of a player on the board
 #[derive(Debug)]
-pub enum Movement {
+pub enum MovementFull {
     /// Single move to adjacent cell
     Move { from: HexIdx, to: HexIdx },
     /// Multiple hops
@@ -276,19 +276,19 @@ pub enum Movement {
     Hops { path: Vec<HexIdx> },
 }
 
-impl Movement {
+impl MovementFull {
     /// Check if the movement contains a specific index
     pub fn contains(&self, idx: &HexIdx) -> bool {
         match self {
-            Movement::Move { from, to } => from == idx || to == idx,
-            Movement::Hops { path } => path.contains(idx),
+            MovementFull::Move { from, to } => from == idx || to == idx,
+            MovementFull::Hops { path } => path.contains(idx),
         }
     }
 }
 
 impl Board<Player> {
     /// Print the board with the current movement highlighted
-    pub fn print_movement(&self, movement: &Movement) {
+    pub fn print_movement(&self, movement: &MovementFull) {
         let indices = movement.get_indices();
         for i in 0..BOARD_LENGTH {
             print!("{}", " ".repeat(i));
@@ -351,7 +351,7 @@ impl<T> Board<T> {
     }
 
     /// Recursive helper to find all possible hop paths starting from a given position.
-    fn collect_hop_paths_from(&self, path: &[HexIdx]) -> Vec<Movement> {
+    fn collect_hop_paths_from(&self, path: &[HexIdx]) -> Vec<MovementFull> {
         let mut all_hop_movements = Vec::new();
 
         for next_hop_idx in self.available_hops_from(*path.last().unwrap()) {
@@ -362,7 +362,7 @@ impl<T> Board<T> {
                 next_path.push(next_hop_idx);
 
                 // This new path is itself a valid complete hop movement
-                all_hop_movements.push(Movement::Hops {
+                all_hop_movements.push(MovementFull::Hops {
                     path: next_path.clone(),
                 });
 
@@ -375,7 +375,7 @@ impl<T> Board<T> {
     }
 
     /// List all available movements for a piece at index `idx`
-    pub fn available_movements_from(&self, idx: HexIdx) -> impl Iterator<Item = Movement> {
+    pub fn available_movements_from(&self, idx: HexIdx) -> impl Iterator<Item = MovementFull> {
         HexDirection::variants()
             .into_iter()
             // For all directions
@@ -385,7 +385,7 @@ impl<T> Board<T> {
                 // Check if it is occupied
                 match nn_pos {
                     // Nearest neighbor is empty => We can move there
-                    None => Some(vec![Movement::Move {
+                    None => Some(vec![MovementFull::Move {
                         from: idx,
                         to: nn_idx,
                     }]),
@@ -407,7 +407,7 @@ impl<T> Board<T> {
                                     self.collect_hop_paths_from(&initial_hop);
 
                                 Some(
-                                    [Movement::Hops { path: initial_hop }]
+                                    [MovementFull::Hops { path: initial_hop }]
                                         .into_iter()
                                         .chain(further_hop_movements)
                                         .collect(),
@@ -437,10 +437,10 @@ impl<T> Board<T> {
     /// Check if all intermediate indices of the movement are valid
     pub fn validate_movement<'a>(
         &self,
-        movement: &'a Movement,
-    ) -> Result<&'a Movement, MovementError> {
+        movement: &'a MovementFull,
+    ) -> Result<&'a MovementFull, MovementError> {
         match movement {
-            Movement::Move { from, to } => {
+            MovementFull::Move { from, to } => {
                 // Check starting position
                 self.get(from)
                     .map_err(|_| MovementError::InvalidIndex(*from))?
@@ -459,7 +459,7 @@ impl<T> Board<T> {
 
                 Ok(movement)
             }
-            Movement::Hops { path } => {
+            MovementFull::Hops { path } => {
                 // Check starting position
                 let start = path
                     .first()
@@ -493,21 +493,21 @@ impl<T> Board<T> {
 }
 
 /// Indices of the player before and after the movement is done
-#[derive(Debug)]
-pub struct MovementIndices {
-    from: HexIdx,
-    to: HexIdx,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Movement {
+    pub from: HexIdx,
+    pub to: HexIdx,
 }
 
-impl Movement {
+impl MovementFull {
     /// Get start and end indices of the movement
-    pub fn get_indices(&self) -> MovementIndices {
+    pub fn get_indices(&self) -> Movement {
         match self {
-            Movement::Move { from, to } => MovementIndices {
+            MovementFull::Move { from, to } => Movement {
                 from: *from,
                 to: *to,
             },
-            Movement::Hops { path } => MovementIndices {
+            MovementFull::Hops { path } => Movement {
                 from: *path.first().unwrap(),
                 to: *path.last().unwrap(),
             },
@@ -516,7 +516,7 @@ impl Movement {
 }
 
 impl<T> Board<T> {
-    pub fn apply_movement(&mut self, indices: &MovementIndices) -> Result<(), MovementError> {
+    pub fn apply_movement(&mut self, indices: &Movement) -> Result<(), MovementError> {
         let piece = self
             .get_mut(&indices.from)
             .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?
@@ -542,7 +542,7 @@ impl<T> Board<T> {
     }
 
     /// Unsafe apply movement without checking for errors
-    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) {
+    pub fn unsafe_apply_movement(&mut self, indices: &Movement) {
         let piece = self.get_mut(&indices.from).unwrap().take().unwrap();
         let target_pos = self.get_mut(&indices.to).unwrap();
         *target_pos = Some(piece);
@@ -553,7 +553,9 @@ impl<T> Board<T> {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Player {
+    #[serde(rename = "1")]
     Player1,
+    #[serde(rename = "2")]
     Player2,
 }
 
@@ -574,13 +576,20 @@ impl Player {
             Player::Player2 => Player::Player1,
         }
     }
+
+    const fn piece(&self) -> char {
+        match self {
+            Player::Player1 => '🔵',
+            Player::Player2 => '🔴',
+        }
+    }
 }
 
 impl Display for Player {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Player1 => write!(f, "🔵"),
-            Self::Player2 => write!(f, "🔴"),
+            Self::Player1 => write!(f, "Player 1 ({piece})", piece = self.piece()),
+            Self::Player2 => write!(f, "Player 2 ({piece})", piece = self.piece()),
         }
     }
 }
@@ -605,7 +614,7 @@ impl Display for Board<Player> {
                 match &self[[i, j]] {
                     None => write!(f, "󠀠󠀠󠀠󠀠   ")?,
                     Some(None) => write!(f, "⚫ ")?,
-                    Some(Some(piece)) => write!(f, "{piece} ")?,
+                    Some(Some(player)) => write!(f, "{piece} ", piece = player.piece())?,
                 }
             }
             writeln!(f)?;
@@ -671,7 +680,7 @@ impl Game {
         self.status
     }
 
-    pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
+    pub fn iter_available_moves(&self) -> impl Iterator<Item = MovementFull> {
         match self.status {
             GameStatus::Finished(_) => todo!(),
             GameStatus::Playing(player) => self
@@ -681,7 +690,7 @@ impl Game {
         }
     }
 
-    pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, GameError> {
+    pub fn apply_movement(&mut self, movement: &MovementFull) -> Result<GameStatus, GameError> {
         match self.status {
             GameStatus::Finished(_) => Err(GameError::GameFinished),
             GameStatus::Playing(current_player) => {
@@ -715,7 +724,7 @@ impl Game {
         }
     }
 
-    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) -> GameStatus {
+    pub fn unsafe_apply_movement(&mut self, indices: &Movement) -> GameStatus {
         // Unsafe apply movement without checking for errors
         self.board.unsafe_apply_movement(indices);
 
@@ -726,11 +735,28 @@ impl Game {
     }
 
     /// Update the game status based on current state of the game
-    /// TODO: Check if game is finished
     fn updade_status(&self) -> GameStatus {
         match self.status {
             GameStatus::Finished(_) => self.status,
-            GameStatus::Playing(player) => GameStatus::Playing(player.opponent()),
+            GameStatus::Playing(player) => {
+                // Check if game is finished
+                if lut::PLAYER2_STARTING_POSITIONS
+                    .iter()
+                    .all(|&idx| self.board.get(&idx).unwrap().as_ref() == Some(&Player::Player1))
+                {
+                    // Player 1 has moved all pieces to the opponent's home row
+                    GameStatus::Finished(Player::Player1)
+                } else if lut::PLAYER1_STARTING_POSITIONS
+                    .iter()
+                    .all(|&idx| self.board.get(&idx).unwrap().as_ref() == Some(&Player::Player2))
+                {
+                    // Player 2 has moved all pieces to the opponent's home row
+                    GameStatus::Finished(Player::Player2)
+                } else {
+                    // Game is still ongoing, switch to the opponent
+                    GameStatus::Playing(player.opponent())
+                }
+            }
         }
     }
 }

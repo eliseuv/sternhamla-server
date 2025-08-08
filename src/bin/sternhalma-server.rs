@@ -1,12 +1,13 @@
 use std::{
     collections::{HashMap, hash_map},
+    fmt::Display,
     io::{self, Cursor, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::atomic::{self, AtomicUsize},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -14,24 +15,16 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
 };
 
-use sternhalma_server::tictactoe::{Game, GameResult, GameStatus, Player, Position};
+use sternhalma_server::sterhalma::{Game, GameStatus, HexIdx, Movement, Player};
 
-const LOCAL_CHANNEL_CAPACITY: usize = 64;
-const REMOTE_MESSAGE_LENGTH: usize = 1024;
-
-fn assign_player() -> Result<Player> {
-    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-
-    match ATOMIC_ID.fetch_add(1, atomic::Ordering::Relaxed) {
-        0 => Ok(Player::Cross),
-        1 => Ok(Player::Nought),
-        _ => bail!("All players are already connected"),
-    }
-}
+/// Capacity communication channels between local threads
+const LOCAL_CHANNEL_CAPACITY: usize = 32;
+/// Maximum length of a remote message in bytes
+const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 
 /// Command line arguments
 #[derive(Debug, Parser)]
-#[command(name = "fc-server", version, about)]
+#[command(name = "sternhalma-server", version, about)]
 struct Args {
     /// Host IP address
     #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))]
@@ -42,12 +35,21 @@ struct Args {
     port: u16,
 }
 
-/// Remote Client -> Local Client Thread
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum RemoteInMessage {
-    /// Movement made by player
-    Movement { position: Position },
+/// Compact representation of movement indices for serialization
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct MovementList(Vec<[HexIdx; 2]>);
+
+impl MovementList {
+    /// Create a new compact movement list from a vector of movements
+    fn new(movements: Vec<Movement>) -> Self {
+        MovementList(
+            movements
+                .into_iter()
+                .map(|indices| [indices.from, indices.to])
+                .collect(),
+        )
+    }
 }
 
 /// Local Client Thread -> Remote Client
@@ -62,22 +64,34 @@ enum RemoteOutMessage {
     Disconnect,
     /// Inform remote client that it is their turn
     Turn {
-        available_moves: Vec<Position>,
+        /// Provide list of available movements
+        movements: MovementList,
     },
     /// Inform remote client about a player's movement
     Movement {
         player: Player,
-        position: Position,
+        movement: [HexIdx; 2],
     },
     GameFinished {
-        result: GameResult,
+        winner: Player,
     },
+}
+
+/// Remote Client -> Local Client Thread
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum RemoteInMessage {
+    /// Movement made by player
+    Choice { index: usize },
 }
 
 #[derive(Debug)]
 enum ServerMessage {
     /// Players turn
-    Turn { available_moves: Vec<Position> },
+    Turn {
+        /// List of available movements
+        movements: Vec<Movement>,
+    },
 }
 
 /// Server Thread -> All Local Client Threads
@@ -86,9 +100,9 @@ enum ServerBroadcast {
     /// Disconnection signal,
     Disconnect,
     /// Player made a move
-    Movement { player: Player, position: Position },
+    Movement { player: Player, movement: Movement },
     /// Result of the game
-    GameFinished { result: GameResult },
+    GameFinished { winner: Player },
 }
 
 /// Local Client Thread -> Server Thread
@@ -97,7 +111,7 @@ enum ClientRequest {
     /// Disconnection request
     Disconnect,
     /// Player made a movement
-    Movement { position: Position },
+    Choice(usize),
 }
 
 /// Packaged client request with identification
@@ -236,12 +250,21 @@ impl Server {
 
         // Main game loop
         while let GameStatus::Playing(current_player) = self.game.status() {
+            println!("{game}", game = self.game);
             log::debug!("Player {current_player} turn");
+            // Calculate available moves
+            let movements = self
+                .game
+                .iter_available_moves()
+                .map(|movement| movement.get_indices())
+                .unique()
+                .collect::<Vec<_>>();
+            // Send turn message to current player
             self.clients_tx
                 .get_mut(&current_player)
                 .ok_or(anyhow!("Unable to find player {current_player}"))?
                 .send(ServerMessage::Turn {
-                    available_moves: self.game.available_moves(),
+                    movements: movements.clone(),
                 })
                 .await
                 .with_context(|| "Failed to send turn message to player {current_player}")?;
@@ -266,44 +289,45 @@ impl Server {
                                         break;
                                     }
 
-                                    ClientRequest::Movement { position } => {
+                                    ClientRequest::Choice(idx) => {
+                                        // Check if player is the current player
                                         if player != current_player {
                                             log::error!("Player {player} attempted to move out of turn");
                                             continue;
                                         }
 
-                                        match self.game.make_move(position) {
-                                            Err(e) => {
-                                                log::error!("Invalid movement: {e:?}");
-                                                // TODO: Inform player of their invalid movement
+                                        // Select chosen movement from list
+                                        let chosen_movement = match movements.get(idx) {
+                                            None => {
+                                                log::error!("Player {player} chose invalid movement index {idx}");
                                                 continue;
-                                            }
-                                            Ok(status) => {
-                                                log::debug!("Player {player} made move {position:?}");
-                                                if let Err(e) = self.broadcast_tx.send(ServerBroadcast::Movement { player, position }) {
-                                                    log::error!("Failed to broadcast player movement: {e:?}");
-                                                    break;
-                                                }
-                                                match status {
-                                                    GameStatus::Playing(_) => {
-                                                        break;
-                                                    }
-                                                    GameStatus::Finished(result) => {
-                                                        log::info!("Game finished with result {result:?}");
-                                                        if let Err(e) = self.broadcast_tx.send(ServerBroadcast::GameFinished { result }) {
-                                                            log::error!("Failed to broadcast game result: {e:?}");
-                                                        }
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                            },
+                                            Some(movement) => movement,
+                                        };
+                                        // Apply chosen movement
+                                        // Since it was previously calculated, it should always be
+                                        // valid
+                                        let game_status = self.game.unsafe_apply_movement(chosen_movement);
 
-                                    _ => {
-                                        log::error!("Invalid request: {request:?}", request = message.request);
-                                    continue;
-                                }
+                                        // Broadcast movement to all players
+                                        self.broadcast_tx.send(ServerBroadcast::Movement {
+                                            player,
+                                            movement: chosen_movement.clone(),
+                                        }).with_context(|| "Failed to broadcast movement")?;
+
+                                        // Check if the game is finished
+                                        if let GameStatus::Finished(winner) = game_status {
+                                            log::info!("Game finished, player {winner} won");
+                                            // Broadcast game finished message
+                                            self.broadcast_tx.send(ServerBroadcast::GameFinished {
+                                                winner,
+                                            }).with_context(|| "Failed to broadcast game finished message")?;
+                                        }
+
+                                        // Continue the game
+                                        break;
+
+                                    }
                                 }
                             },
                         }
@@ -387,10 +411,6 @@ impl Client {
             .await
             .with_context(|| "Failed to send message to remote client")?;
 
-        // NOTE: Flushing the stream may be necessary at this point.
-        // Pro: The data is promptly sent to the underlying OS buffer
-        // Con: Additional syscall and latency
-
         log::debug!(
             "[Player {}] Successfully sent payload of {bytes_written} to remote client",
             self.player,
@@ -455,8 +475,8 @@ impl Client {
         );
 
         match message {
-            RemoteInMessage::Movement { position } => self
-                .send_request(ClientRequest::Movement { position })
+            RemoteInMessage::Choice { index } => self
+                .send_request(ClientRequest::Choice(index))
                 .await
                 .with_context(|| "Unable to forward message to server"),
         }
@@ -470,12 +490,15 @@ impl Client {
                 self.send_remote_message(RemoteOutMessage::Disconnect)
                     .await?;
             }
-            ServerBroadcast::Movement { player, position } => {
-                self.send_remote_message(RemoteOutMessage::Movement { player, position })
-                    .await?;
+            ServerBroadcast::Movement { player, movement } => {
+                self.send_remote_message(RemoteOutMessage::Movement {
+                    player,
+                    movement: [movement.from, movement.to],
+                })
+                .await?;
             }
-            ServerBroadcast::GameFinished { result } => {
-                self.send_remote_message(RemoteOutMessage::GameFinished { result })
+            ServerBroadcast::GameFinished { winner } => {
+                self.send_remote_message(RemoteOutMessage::GameFinished { winner })
                     .await?;
             }
         };
@@ -487,9 +510,11 @@ impl Client {
         log::debug!("[Player {}] Received message: {message:?}", self.player);
 
         match message {
-            ServerMessage::Turn { available_moves } => {
-                self.send_remote_message(RemoteOutMessage::Turn { available_moves })
-                    .await?;
+            ServerMessage::Turn { movements } => {
+                self.send_remote_message(RemoteOutMessage::Turn {
+                    movements: MovementList::new(movements),
+                })
+                .await?;
             }
         }
 
@@ -593,6 +618,27 @@ impl Client {
     }
 }
 
+/// Error type for too many players
+/// Can later be expanded to an enum of all different errors related to player connection
+#[derive(Debug)]
+struct TooManyPlayers;
+
+impl Display for TooManyPlayers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Too many players connected")
+    }
+}
+
+/// Assign player to a new client
+const fn assign_player(client_id: usize) -> Result<Player, TooManyPlayers> {
+    match client_id {
+        0 => Ok(Player::Player1),
+        1 => Ok(Player::Player2),
+        _ => Err(TooManyPlayers),
+    }
+}
+
+/// Main thread message to server thread
 #[derive(Debug)]
 enum MainThreadMessage {
     ClientConnected(Player, mpsc::Sender<ServerMessage>),
@@ -642,7 +688,7 @@ async fn main() -> Result<()> {
 
         // Connections loop
         connection = async {
-            loop{
+            for client_id in 0.. {
                 match listener.accept().await {
                     Err(e) => {
                         log::error!("Failed to accept connection: {e:?}");
@@ -652,9 +698,9 @@ async fn main() -> Result<()> {
                         log::info!("Accepted connection from {addr}");
 
                         // Assign player to new client
-                        let player = match assign_player() {
+                        let player = match assign_player(client_id) {
                             Err(e) => {
-                                log::error!("Failed to assign player to new client: {e:?}");
+                                log::error!("Failed to assign player to new client: {e}");
                                 continue;
                             },
                             Ok(player) => {
