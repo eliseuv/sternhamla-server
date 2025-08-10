@@ -240,7 +240,8 @@ impl Server {
         Ok(())
     }
 
-    async fn run(mut self) -> Result<()> {
+    /// Main server thread loop
+    async fn run(&mut self) -> Result<()> {
         log::trace!("Server thread started");
 
         // Wait for players to connect
@@ -286,7 +287,8 @@ impl Server {
                                 match message.request {
                                     ClientRequest::Disconnect => {
                                         log::error!("Player {player} disconnected mid-game");
-                                        break;
+                                        // Finish the game
+                                        bail!("Player {player} disconnected mid-game");
                                     }
 
                                     ClientRequest::Choice(idx) => {
@@ -324,7 +326,7 @@ impl Server {
                                             }).with_context(|| "Failed to broadcast game finished message")?;
                                         }
 
-                                        // Continue the game
+                                        // Next turn
                                         break;
 
                                     }
@@ -338,12 +340,20 @@ impl Server {
             }
         }
 
-        // Disconnect all players
-        self.disconnect_players()
-            .await
-            .with_context(|| "Failed to disconnected all players")?;
-
         Ok(())
+    }
+
+    /// Server thread run wrapper
+    async fn try_run(mut self) -> Result<()> {
+        // Attempt to run server
+        let result = self.run().await;
+
+        // Disconnect all players
+        if let Err(e) = self.disconnect_players().await {
+            log::error!("Failed to disconnect all players: {e:?}");
+        }
+
+        result
     }
 }
 
@@ -521,7 +531,8 @@ impl Client {
         Ok(())
     }
 
-    async fn run(mut self) -> Result<()> {
+    /// Client thread main loop
+    async fn run(&mut self) -> Result<()> {
         log::trace!("[Player {}] Task spawned", self.player);
 
         // Send player assignment message to remote client
@@ -612,9 +623,23 @@ impl Client {
             }
         }
 
-        self.send_request(ClientRequest::Disconnect).await?;
-        log::trace!("[Player{}] Shutting down task", self.player);
         Ok(())
+    }
+
+    /// Client thread run wrapper
+    async fn try_run(mut self) -> Result<()> {
+        // Attempt to run client
+        let result = self.run().await;
+
+        // Send disconnect request to server
+        if let Err(e) = self.send_request(ClientRequest::Disconnect).await {
+            log::error!(
+                "[Player {}] Failed to send disconnect request to server: {e:?}",
+                self.player
+            );
+        }
+
+        result
     }
 }
 
@@ -670,7 +695,7 @@ async fn main() -> Result<()> {
     let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx)
         .with_context(|| "Failed to create server")?;
     tokio::spawn(async move {
-        if let Err(e) = server.run().await {
+        if let Err(e) = server.try_run().await {
             log::error!("Server encountered an error: {e:?}");
         }
         log::trace!("Sending shutdown signal");
@@ -722,8 +747,8 @@ async fn main() -> Result<()> {
 
                                 // Spawn client thread
                                 let task = tokio::spawn(async move {
-                                    if let Err(e) = client.run().await {
-                                        log::error!("Client encountered an error: {e:?}");
+                                    if let Err(e) = client.try_run().await {
+                                        log::error!("Client for player {player} encountered an error: {e:?}");
                                     }
                                 });
 
