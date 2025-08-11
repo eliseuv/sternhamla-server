@@ -21,12 +21,27 @@ pub struct Board<T>([Position<T>; BOARD_LENGTH * BOARD_LENGTH]);
 /// Axial index for the hexagonal lattice
 pub type HexIdx = [usize; 2];
 
-// TODO: Function that calculates distance between two axial indices on the haxagonal lattice
-pub fn distance(a: HexIdx, b: HexIdx) -> usize {
-    // Using the formula for distance in a hexagonal grid
-    ((a[0] as isize - b[0] as isize).abs()
-        + (a[1] as isize - b[1] as isize).abs()
-        + ((a[0] as isize - b[0] as isize) - (a[1] as isize - b[1] as isize)).abs()) as usize
+/// Hexagonal distance between two cells in the hexagonal grid
+/// How many steps it takes to get from one cell to another
+pub fn hex_distance([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> usize {
+    let dq = q1.abs_diff(q2);
+    let dr = r1.abs_diff(r2);
+    [dq, dr, (q1 + r1).abs_diff(q2 + r2)]
+        .into_iter()
+        .max()
+        .expect("Array is not empty")
+}
+
+/// Square function
+const fn square(n: usize) -> usize {
+    n * n
+}
+
+/// Euclidean distance between two cells in the hexagonal grid
+pub fn dist_euclidean([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> f64 {
+    let dq = q1.abs_diff(q2);
+    let dr = r1.abs_diff(r2);
+    ((square(dq + dr) - (dq * dr)) as f64).sqrt()
 }
 
 /// Board indexing
