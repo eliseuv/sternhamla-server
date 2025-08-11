@@ -2,20 +2,20 @@
   description = "Rust";
 
   inputs = {
-    flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "nixpkgs/nixos-unstable";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
     {
       self,
-      flake-utils,
       nixpkgs,
       fenix,
+      flake-utils,
       ...
     }@inputs:
     let
