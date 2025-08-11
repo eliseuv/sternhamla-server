@@ -300,10 +300,6 @@ impl Server {
                                         }
                                     }
 
-                                    _ => {
-                                        log::error!("Invalid request: {request:?}", request = message.request);
-                                    continue;
-                                }
                                 }
                             },
                         }
