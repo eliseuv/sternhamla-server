@@ -15,7 +15,10 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
 };
 
-use sternhalma_server::sterhalma::{Game, GameStatus, HexIdx, Movement, Player};
+use sternhalma_server::sterhalma::{
+    Game, GameStatus,
+    board::{HexIdx, movement::Movement, player::Player},
+};
 
 /// Capacity communication channels between local threads
 const LOCAL_CHANNEL_CAPACITY: usize = 32;

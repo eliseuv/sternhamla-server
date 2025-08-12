@@ -1,5 +1,5 @@
 //! Sternhalma game server
 //!
 
-/// Starhalma game representation
+/// Starhalma game
 pub mod sterhalma;
