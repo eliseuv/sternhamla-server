@@ -19,6 +19,16 @@ pub enum GameStatus {
     Finished { winner: Player, turns: usize },
 }
 
+impl GameStatus {
+    /// Get number of turns
+    pub fn turns(&self) -> usize {
+        match self {
+            GameStatus::Playing { turns, .. } => *turns,
+            GameStatus::Finished { turns, .. } => *turns,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Game {
     /// Board state
