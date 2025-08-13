@@ -132,8 +132,6 @@ struct Server {
     broadcast_tx: broadcast::Sender<ServerBroadcast>,
     // Channel for receiving messages from local client threads
     clients_rx: mpsc::Receiver<ClientMessage>,
-    // Game state
-    game: Game,
 }
 
 impl Server {
@@ -148,7 +146,6 @@ impl Server {
             clients_tx: HashMap::new(),
             broadcast_tx,
             clients_rx,
-            game: Game::new(),
         })
     }
 
@@ -240,25 +237,27 @@ impl Server {
         let mut turns_timer = Instant::now();
         let mut turns_rate = 0.0;
 
+        // Create game
+        let mut game = Game::new();
+
         // Main game loop
         while let GameStatus::Playing {
             player: current_player,
             ..
-        } = self.game.status()
+        } = game.status()
         {
             // Calculate average turn rate
-            if self.game.status().turns() % N_TURNS == 0 {
+            if game.status().turns() % N_TURNS == 0 {
                 turns_rate = N_TURNS as f64 / turns_timer.elapsed().as_secs_f64();
                 turns_timer = Instant::now();
             }
 
-            println!("{game}Rate: {turns_rate:.1} turns/s", game = self.game);
+            println!("{game}Rate: {turns_rate:.1} turns/s");
 
             log::debug!("Player {current_player} turn");
 
             // Calculate available moves
-            let movements: Vec<[HexIdx; 2]> = self
-                .game
+            let movements: Vec<[HexIdx; 2]> = game
                 .iter_available_moves()
                 .map(|mv| {
                     let Movement { from, to } = mv.get_indices();
@@ -328,7 +327,7 @@ impl Server {
                                         // Apply chosen movement
                                         // Since it was previously calculated, it should always be valid
                                         // TODO: Avoid type conversion since its a hot loop
-                                        let game_status = self.game.unsafe_apply_movement(&Movement{from: movement[0], to: movement[1]});
+                                        let game_status = game.unsafe_apply_movement(&Movement{from: movement[0], to: movement[1]});
 
                                         // Broadcast movement to all players
                                         self.broadcast_tx.send(ServerBroadcast::Movement {
