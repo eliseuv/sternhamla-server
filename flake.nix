@@ -71,8 +71,6 @@
         ];
 
         env = {
-          RUST_BACKTRACE = 1;
-          RUST_LOG = "warn";
           # Compilation cache
           RUSTC_WRAPPER = "sccache";
           # Required by rust-analyzer
