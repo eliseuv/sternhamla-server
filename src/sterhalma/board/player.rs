@@ -54,9 +54,9 @@ impl Board<Player> {
     pub fn new() -> Self {
         Self::empty()
             .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Player::Player1)
-            .expect("Player 1 positions are valid")
+            .expect("Invalid index in Player 1 starting position")
             .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Player::Player2)
-            .expect("Player 2 positions are valid")
+            .expect("Invalid index in Player 2 starting position")
     }
 }
 

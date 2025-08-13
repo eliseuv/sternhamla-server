@@ -29,7 +29,7 @@ pub fn hex_distance([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> usize {
     [dq, dr, (q1 + r1).abs_diff(q2 + r2)]
         .into_iter()
         .max()
-        .expect("Array is not empty")
+        .unwrap()
 }
 
 /// Square macro
