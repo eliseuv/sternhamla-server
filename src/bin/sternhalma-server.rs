@@ -297,18 +297,18 @@ impl Server {
 
                                     // Client chose a movement
                                     ClientRequest::Choice(movement) => {
-                                        // Check if player is the current player
-                                        if player != current_player {
-                                            log::error!("Player {player} attempted to move out of turn");
-                                            continue;
-                                        }
+                                        // // Check if player is the current player
+                                        // if player != current_player {
+                                        //     log::error!("Player {player} attempted to move out of turn");
+                                        //     continue;
+                                        // }
 
-                                        // Validate movement
-                                        if !movements.contains(&movement){
-                                            log::error!("Player {player} chose invalid movement {movement:?}");
-                                            // TODO: Inform client of the error
-                                            continue;
-                                        }
+                                        // // Validate movement
+                                        // if !movements.contains(&movement){
+                                        //     log::error!("Player {player} chose invalid movement {movement:?}");
+                                        //     // TODO: Inform client of the error
+                                        //     continue;
+                                        // }
 
                                         log::debug!("Player {player} chose movement {movement:?}");
 
