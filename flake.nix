@@ -50,23 +50,23 @@
           rust-analyzer
           bacon
 
-          # Cargo tools
-          cargo-watch
-          cargo-cross
-          cargo-fuzz
-          cargo-nextest
-          cargo-deny
-          cargo-edit
+          # # Cargo tools
+          # cargo-watch
+          # cargo-cross
+          # cargo-fuzz
+          # cargo-nextest
+          # cargo-deny
+          # cargo-edit
 
           # Compilation cache
           sccache
 
-          # Debugging
-          lldb
+          # # Debugging
+          # lldb
 
-          # https://nixos.wiki/wiki/Rust#Building_Rust_crates_that_require_external_system_libraries
-          openssl.dev
-          pkg-config
+          # # https://nixos.wiki/wiki/Rust#Building_Rust_crates_that_require_external_system_libraries
+          # openssl.dev
+          # pkg-config
 
         ];
 
@@ -76,7 +76,7 @@
           # Required by rust-analyzer
           RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
           # OpenSSL config
-          PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+          # PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
         };
 
         shellHook = ''
