@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, hash_map},
     fmt::Display,
     io::{self, Cursor, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -11,7 +11,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{UnixListener, UnixStream},
     sync::{broadcast, mpsc, oneshot},
 };
 
@@ -30,12 +30,8 @@ const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 #[command(name = "sternhalma-server", version, about)]
 struct Args {
     /// Host IP address
-    #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))]
-    host: IpAddr,
-
-    /// Port to bind the server to
-    #[arg(short, long)]
-    port: u16,
+    #[arg(long)]
+    socket: PathBuf,
 }
 
 /// Compact representation of movement indices for serialization
@@ -370,7 +366,7 @@ struct Client {
     /// Player assigned to client
     player: Player,
     /// TCP stream for communication with the remote client
-    stream: TcpStream,
+    stream: UnixStream,
     /// Receiver for direct message from the server
     server_rx: mpsc::Receiver<ServerMessage>,
     /// Receiver for messages broadcast by the server
@@ -386,7 +382,7 @@ struct Client {
 impl Client {
     fn new(
         player: Player,
-        stream: TcpStream,
+        stream: UnixStream,
         server_rx: mpsc::Receiver<ServerMessage>,
         broadcast_rx: broadcast::Receiver<ServerBroadcast>,
         client_tx: mpsc::Sender<ClientMessage>,
@@ -711,11 +707,9 @@ async fn main() -> Result<()> {
     });
 
     // Bind TCP listener to the socket address
-    let addr = SocketAddr::new(args.host, args.port);
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| "Failed to bind TCP listener")?;
-    log::info!("Lisening at {addr}");
+    let listener =
+        UnixListener::bind(&args.socket).with_context(|| "Failed to bind TCP listener")?;
+    log::info!("Lisening at {socket:?}", socket = args.socket);
 
     tokio::select! {
 
@@ -728,7 +722,7 @@ async fn main() -> Result<()> {
                         continue;
                     }
                     Ok((stream, addr)) => {
-                        log::info!("Accepted connection from {addr}");
+                        log::info!("Accepted connection from {addr:?}");
 
                         // Assign player to new client
                         let player = match assign_player(client_id) {
