@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use anyhow::Result;
 
 use crate::sterhalma::board::{
-    Board, InvalidBoardIndex, lut,
+    Board, HexIdx, InvalidBoardIndex, lut,
     movement::{Movement, MovementError, MovementFull},
     player::Player,
 };
@@ -48,6 +48,8 @@ pub struct Game {
     board: Board<Player>,
     /// Game status
     status: GameStatus,
+    /// Game history
+    history: Vec<[HexIdx; 2]>,
 }
 
 impl Display for Game {
@@ -69,6 +71,7 @@ impl Game {
                 player: Player::Player1,
                 turns: 0,
             },
+            history: Vec::with_capacity(128),
         }
     }
 
@@ -78,6 +81,10 @@ impl Game {
 
     pub fn status(&self) -> GameStatus {
         self.status
+    }
+
+    pub fn history(&self) -> &[[HexIdx; 2]] {
+        &self.history
     }
 }
 
@@ -176,6 +183,9 @@ impl Game {
                 // Apply the movement to the board
                 self.board.unsafe_apply_movement(&indices);
 
+                // Update game history
+                self.history.push([indices.from, indices.to]);
+
                 // Update game status
                 self.status = self.next_status();
 
@@ -187,6 +197,9 @@ impl Game {
     pub fn unsafe_apply_movement(&mut self, indices: &Movement) -> GameStatus {
         // Unsafe apply movement without checking for errors
         self.board.unsafe_apply_movement(indices);
+
+        // Update game history
+        self.history.push([indices.from, indices.to]);
 
         // Update game status
         self.status = self.next_status();
