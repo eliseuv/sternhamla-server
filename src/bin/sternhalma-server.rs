@@ -35,7 +35,7 @@ struct Args {
 }
 
 /// Compact representation of movement indices for serialization
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct MovementList(Vec<[HexIdx; 2]>);
 
@@ -82,7 +82,7 @@ enum RemoteOutMessage {
 #[serde(rename_all = "snake_case", tag = "type")]
 enum RemoteInMessage {
     /// Movement made by player
-    Choice { index: usize },
+    Choice { movement: [HexIdx; 2] },
 }
 
 #[derive(Debug)]
@@ -90,7 +90,7 @@ enum ServerMessage {
     /// Players turn
     Turn {
         /// List of available movements
-        movements: Vec<Movement>,
+        movements: MovementList,
     },
 }
 
@@ -111,7 +111,7 @@ enum ClientRequest {
     /// Disconnection request
     Disconnect,
     /// Player made a movement
-    Choice(usize),
+    Choice([HexIdx; 2]),
 }
 
 /// Packaged client request with identification
@@ -256,12 +256,16 @@ impl Server {
             println!("{game}", game = self.game);
             log::debug!("Player {current_player} turn");
             // Calculate available moves
-            let movements = self
-                .game
-                .iter_available_moves()
-                .map(|movement| movement.get_indices())
-                .unique()
-                .collect::<Vec<_>>();
+            let movements = MovementList(
+                self.game
+                    .iter_available_moves()
+                    .map(|movement| {
+                        let Movement { from, to } = movement.get_indices();
+                        [from, to]
+                    })
+                    .unique()
+                    .collect(),
+            );
             // Send turn message to current player
             self.clients_tx
                 .get_mut(&current_player)
@@ -295,7 +299,7 @@ impl Server {
                                         bail!("Player {player} disconnected mid-game");
                                     }
 
-                                    ClientRequest::Choice(idx) => {
+                                    ClientRequest::Choice(movement) => {
                                         // Check if player is the current player
                                         if player != current_player {
                                             log::error!("Player {player} attempted to move out of turn");
@@ -303,22 +307,25 @@ impl Server {
                                         }
 
                                         // Select chosen movement from list
-                                        let chosen_movement = match movements.get(idx) {
-                                            None => {
-                                                log::error!("Player {player} chose invalid movement index {idx}");
-                                                continue;
-                                            },
-                                            Some(movement) => movement,
+                                        if !movements.0.contains(&movement){
+                                            log::error!("Player {player} chose invalid movement {movement:?}");
+                                            continue;
+                                        }
+
+                                        let movement = Movement {
+                                            from: movement[0],
+                                            to: movement[1],
                                         };
+                                        log::debug!("Player {player} chose movement {movement:?}");
+
                                         // Apply chosen movement
-                                        // Since it was previously calculated, it should always be
-                                        // valid
-                                        let game_status = self.game.unsafe_apply_movement(chosen_movement);
+                                        // Since it was previously calculated, it should always be valid
+                                        let game_status = self.game.unsafe_apply_movement(&movement);
 
                                         // Broadcast movement to all players
                                         self.broadcast_tx.send(ServerBroadcast::Movement {
                                             player,
-                                            movement: chosen_movement.clone(),
+                                            movement,
                                         }).with_context(|| "Failed to broadcast movement")?;
 
                                         // Check if the game is finished
@@ -472,9 +479,8 @@ impl Client {
                 format!("Failed to receive message of length {message_length} from remote client")
             })?;
         log::debug!(
-            "[Player {}] Remote message receive successfully: {}",
+            "[Player {}] Remote message receive successfully",
             self.player,
-            std::str::from_utf8(&self.buffer_in)?
         );
 
         // Decode message
@@ -489,8 +495,8 @@ impl Client {
         );
 
         match message {
-            RemoteInMessage::Choice { index } => self
-                .send_request(ClientRequest::Choice(index))
+            RemoteInMessage::Choice { movement } => self
+                .send_request(ClientRequest::Choice(movement))
                 .await
                 .with_context(|| "Unable to forward message to server"),
         }
@@ -525,10 +531,8 @@ impl Client {
 
         match message {
             ServerMessage::Turn { movements } => {
-                self.send_remote_message(RemoteOutMessage::Turn {
-                    movements: MovementList::new(movements),
-                })
-                .await?;
+                self.send_remote_message(RemoteOutMessage::Turn { movements })
+                    .await?;
             }
         }
 
