@@ -233,7 +233,7 @@ impl Server {
             .with_context(|| "Failed to wait for players to connect")?;
 
         // Variables for calculation of average turn rate
-        const N_TURNS: usize = 64;
+        const N_TURNS: usize = 128;
         let mut turns_timer = Instant::now();
         let mut turns_rate = 0.0;
 
@@ -250,9 +250,14 @@ impl Server {
             if game.status().turns() % N_TURNS == 0 {
                 turns_rate = N_TURNS as f64 / turns_timer.elapsed().as_secs_f64();
                 turns_timer = Instant::now();
+                log::info!(
+                    "Turn: {turn} Rate: {turns_rate:.1} turns/s History: {hist_kb}KB",
+                    turn = game.status().turns(),
+                    hist_kb = game.history_bytes() as f64 / 1024.0
+                );
             }
 
-            println!("{game}Rate: {turns_rate:.1} turns/s");
+            // println!("{game}Rate: {turns_rate:.1} turns/s");
 
             log::debug!("Player {current_player} turn");
 

@@ -86,6 +86,10 @@ impl Game {
     pub fn history(&self) -> &[[HexIdx; 2]] {
         &self.history
     }
+
+    pub fn history_bytes(&self) -> usize {
+        self.history.capacity() * std::mem::size_of::<[HexIdx; 2]>()
+    }
 }
 
 impl Default for Game {
