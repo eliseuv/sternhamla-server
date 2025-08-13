@@ -269,10 +269,19 @@ impl Server {
             loop {
                 tokio::select! {
 
+                    // Message from main threat
+                    main_msg = self.main_rx.recv() => {
+                        match main_msg {
+                            None => bail!("Channel from main thread closed"),
+                            Some(_) => todo!("Handle main thread message"),
+                        }
+                    }
+
+                    // Message from client thread
                     client_msg = self.clients_rx.recv() => {
                         match client_msg {
                             None => {
-                                log::error!("Clients message channel closed");
+                                log::error!("Channel from clients closed");
                                 break;
                             }
                             Some(message) => {
