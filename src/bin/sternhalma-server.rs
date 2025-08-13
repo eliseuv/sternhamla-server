@@ -77,6 +77,7 @@ enum RemoteOutMessage {
     },
     GameFinished {
         winner: Player,
+        turns: usize,
     },
 }
 
@@ -105,7 +106,7 @@ enum ServerBroadcast {
     /// Player made a move
     Movement { player: Player, movement: Movement },
     /// Result of the game
-    GameFinished { winner: Player },
+    GameFinished { winner: Player, turns: usize },
 }
 
 /// Local Client Thread -> Server Thread
@@ -253,7 +254,11 @@ impl Server {
             .with_context(|| "Failed to wait for players to connect")?;
 
         // Main game loop
-        while let GameStatus::Playing(current_player) = self.game.status() {
+        while let GameStatus::Playing {
+            player: current_player,
+            ..
+        } = self.game.status()
+        {
             println!("{game}", game = self.game);
             log::debug!("Player {current_player} turn");
             // Calculate available moves
@@ -321,11 +326,11 @@ impl Server {
                                         }).with_context(|| "Failed to broadcast movement")?;
 
                                         // Check if the game is finished
-                                        if let GameStatus::Finished(winner) = game_status {
+                                        if let GameStatus::Finished{ winner, turns } = game_status {
                                             log::info!("Game finished, player {winner} won");
                                             // Broadcast game finished message
                                             self.broadcast_tx.send(ServerBroadcast::GameFinished {
-                                                winner,
+                                                winner, turns
                                             }).with_context(|| "Failed to broadcast game finished message")?;
                                         }
 
@@ -510,8 +515,8 @@ impl Client {
                 })
                 .await?;
             }
-            ServerBroadcast::GameFinished { winner } => {
-                self.send_remote_message(RemoteOutMessage::GameFinished { winner })
+            ServerBroadcast::GameFinished { winner, turns } => {
+                self.send_remote_message(RemoteOutMessage::GameFinished { winner, turns })
                     .await?;
             }
         };

@@ -14,9 +14,9 @@ pub mod board;
 #[derive(Debug, Clone, Copy)]
 pub enum GameStatus {
     /// Which piece is currently playing and the last movement made
-    Playing(Player),
+    Playing { player: Player, turns: usize },
     /// Game finished
-    Finished(Player),
+    Finished { winner: Player, turns: usize },
 }
 
 #[derive(Debug)]
@@ -25,23 +25,19 @@ pub struct Game {
     board: Board<Player>,
     /// Game status
     status: GameStatus,
-    /// Count of turns played
-    turns: usize,
 }
 
 impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.board)?;
         match self.status {
-            GameStatus::Playing(player) => {
-                write!(f, "Turn: {turn}\tPlaying: {player}", turn = self.turns)?
+            GameStatus::Playing { player, turns } => {
+                writeln!(f, "Turn: {turns}\nPlaying: {player}")?
             }
-            GameStatus::Finished(winner) => {
-                write!(f, "Game finished!")?;
-                write!(f, "Winner: {winner}")?;
+            GameStatus::Finished { winner, turns } => {
+                writeln!(f, "Game finished!\nWinner: {winner}\nTotal turns: {turns}")?;
             }
         }
-        Ok(())
+        writeln!(f, "{}", self.board)
     }
 }
 
@@ -49,8 +45,10 @@ impl Game {
     pub fn new() -> Self {
         Self {
             board: Board::new(),
-            status: GameStatus::Playing(Player::Player1),
-            turns: 0,
+            status: GameStatus::Playing {
+                player: Player::Player1,
+                turns: 0,
+            },
         }
     }
 
@@ -85,29 +83,38 @@ impl Game {
     fn next_status(&self) -> GameStatus {
         match self.status {
             // Game finished is absorbing state
-            GameStatus::Finished(_) => self.status,
+            GameStatus::Finished { .. } => self.status,
             // Game is ongoing
-            GameStatus::Playing(player) => {
+            GameStatus::Playing { player, turns } => {
                 // Check if game is finished
                 if lut::PLAYER2_STARTING_POSITIONS.iter().all(|idx| {
                     self.board
                         .get(idx)
-                        .expect("Player 2 starting position indices are valid")
+                        .expect("Invalid index in Player 2 starting positions")
                         == &Some(Player::Player1)
                 }) {
                     // Player 1 has moved all pieces to the opponent's home row
-                    GameStatus::Finished(Player::Player1)
+                    GameStatus::Finished {
+                        winner: Player::Player1,
+                        turns: turns + 1,
+                    }
                 } else if lut::PLAYER1_STARTING_POSITIONS.iter().all(|idx| {
                     self.board
                         .get(idx)
-                        .expect("Player 1 starting position indices are valid")
+                        .expect("Invalid index in Player 1 starting positions")
                         == &Some(Player::Player2)
                 }) {
                     // Player 2 has moved all pieces to the opponent's home row
-                    GameStatus::Finished(Player::Player2)
+                    GameStatus::Finished {
+                        winner: Player::Player2,
+                        turns: turns + 1,
+                    }
                 } else {
                     // Game is still ongoing, switch to the opponent
-                    GameStatus::Playing(player.opponent())
+                    GameStatus::Playing {
+                        player: player.opponent(),
+                        turns: turns + 1,
+                    }
                 }
             }
         }
@@ -115,15 +122,18 @@ impl Game {
 
     pub fn iter_available_moves(&self) -> impl Iterator<Item = MovementFull> {
         match &self.status {
-            GameStatus::Finished(_) => todo!(),
-            GameStatus::Playing(player) => self.board.iter_player_movements(player),
+            GameStatus::Finished { .. } => todo!(),
+            GameStatus::Playing { player, .. } => self.board.iter_player_movements(player),
         }
     }
 
     pub fn apply_movement(&mut self, movement: &MovementFull) -> Result<GameStatus, GameError> {
         match self.status {
-            GameStatus::Finished(_) => Err(GameError::GameFinished),
-            GameStatus::Playing(current_player) => {
+            GameStatus::Finished { .. } => Err(GameError::GameFinished),
+            GameStatus::Playing {
+                player: current_player,
+                ..
+            } => {
                 // Check if the movement is made by the current player
                 let indices = movement.get_indices();
                 if self
@@ -149,9 +159,6 @@ impl Game {
                 // Update game status
                 self.status = self.next_status();
 
-                // Increment the turn count
-                self.turns += 1;
-
                 Ok(self.status)
             }
         }
@@ -163,9 +170,6 @@ impl Game {
 
         // Update game status
         self.status = self.next_status();
-
-        // Increment the turn count
-        self.turns += 1;
 
         self.status
     }
