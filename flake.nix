@@ -7,7 +7,6 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
@@ -15,9 +14,8 @@
       self,
       nixpkgs,
       fenix,
-      flake-utils,
       ...
-    }@inputs:
+    }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -43,7 +41,7 @@
           );
       };
 
-      devShells.x86_64-linux.default = pkgs.mkShell {
+      devShells.${system}.default = pkgs.mkShell {
 
         packages = with pkgs; [
 
