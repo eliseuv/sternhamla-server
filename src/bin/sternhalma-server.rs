@@ -124,15 +124,13 @@ struct ClientMessage {
 
 impl RemoteInMessage {
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        // ciborium::from_reader(bytes).with_context(||"Failed to deserialize remote message")
-        serde_json::from_slice(bytes).with_context(|| "Failed to deserialize remote message")
+        ciborium::from_reader(bytes).with_context(|| "Failed to deserialize remote message")
     }
 }
 
 impl RemoteOutMessage {
     fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
-        // ciborium::into_writer(self, writer).with_context(||"Failed to serialize remote message")
-        serde_json::to_writer(writer, self).with_context(|| "Failed to serialize remote message")
+        ciborium::into_writer(self, writer).with_context(|| "Failed to serialize remote message")
     }
 }
 
