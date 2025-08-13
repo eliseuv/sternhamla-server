@@ -29,6 +29,19 @@ impl GameStatus {
     }
 }
 
+impl Display for GameStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GameStatus::Playing { player, turns } => {
+                write!(f, "Playing: {player}\tTurn: {turns}")
+            }
+            GameStatus::Finished { winner, turns } => {
+                write!(f, "Winner: {winner}\tTotal turns: {turns}")
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Game {
     /// Board state
@@ -39,15 +52,12 @@ pub struct Game {
 
 impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.status {
-            GameStatus::Playing { player, turns } => {
-                writeln!(f, "Turn: {turns}\nPlaying: {player}")?
-            }
-            GameStatus::Finished { winner, turns } => {
-                writeln!(f, "Game finished!\nWinner: {winner}\nTotal turns: {turns}")?;
-            }
-        }
-        writeln!(f, "{}", self.board)
+        writeln!(
+            f,
+            "{board}{status}",
+            board = self.board,
+            status = self.status
+        )
     }
 }
 
