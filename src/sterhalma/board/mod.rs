@@ -32,16 +32,18 @@ pub fn hex_distance([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> usize {
         .expect("Array is not empty")
 }
 
-/// Square function
-const fn square(n: usize) -> usize {
-    n * n
+/// Square macro
+macro_rules! square {
+    ($n:expr) => {
+        $n * $n
+    };
 }
 
 /// Euclidean distance between two cells in the hexagonal grid
 pub fn dist_euclidean([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> f64 {
     let dq = q1.abs_diff(q2);
     let dr = r1.abs_diff(r2);
-    ((square(dq + dr) - (dq * dr)) as f64).sqrt()
+    ((square!(dq + dr) - (dq * dr)) as f64).sqrt()
 }
 
 /// Board indexing
