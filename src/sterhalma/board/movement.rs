@@ -8,7 +8,7 @@ use crate::sterhalma::board::{
 
 /// Movements of a player on the board
 #[derive(Debug)]
-pub enum MovementFull {
+pub enum Movement {
     /// Single move to adjacent cell
     Move { from: HexIdx, to: HexIdx },
     /// Multiple hops
@@ -16,28 +16,28 @@ pub enum MovementFull {
     Hops { path: Vec<HexIdx> },
 }
 
-impl MovementFull {
+impl Movement {
     /// Get the origin index of the movement
-    fn origin(&self) -> HexIdx {
+    pub fn from(&self) -> &HexIdx {
         match self {
-            MovementFull::Move { from, .. } => *from,
-            MovementFull::Hops { path } => *path.first().unwrap(),
+            Movement::Move { from, .. } => from,
+            Movement::Hops { path } => path.first().unwrap(),
         }
     }
 
     /// Get the destination index of the movement
-    fn destination(&self) -> HexIdx {
+    pub fn to(&self) -> &HexIdx {
         match self {
-            MovementFull::Move { to, .. } => *to,
-            MovementFull::Hops { path } => *path.last().unwrap(),
+            Movement::Move { to, .. } => to,
+            Movement::Hops { path } => path.last().unwrap(),
         }
     }
 
     /// Check if the movement contains a specific index
     fn contains(&self, idx: &HexIdx) -> bool {
         match self {
-            MovementFull::Move { from, to } => from == idx || to == idx,
-            MovementFull::Hops { path } => path.contains(idx),
+            Movement::Move { from, to } => from == idx || to == idx,
+            Movement::Hops { path } => path.contains(idx),
         }
     }
 }
@@ -71,7 +71,7 @@ impl<T> Board<T> {
     }
 
     /// Recursive helper to find all possible hop paths starting from a given position.
-    fn collect_hop_paths_from(&self, path: &[HexIdx]) -> Vec<MovementFull> {
+    fn collect_hop_paths_from(&self, path: &[HexIdx]) -> Vec<Movement> {
         let mut all_hop_movements = Vec::new();
 
         for next_hop_idx in self.available_hops_from(*path.last().unwrap()) {
@@ -82,7 +82,7 @@ impl<T> Board<T> {
                 next_path.push(next_hop_idx);
 
                 // This new path is itself a valid complete hop movement
-                all_hop_movements.push(MovementFull::Hops {
+                all_hop_movements.push(Movement::Hops {
                     path: next_path.clone(),
                 });
 
@@ -95,7 +95,7 @@ impl<T> Board<T> {
     }
 
     /// List all available movements for a piece at index `idx`
-    pub fn available_movements_from(&self, idx: HexIdx) -> impl Iterator<Item = MovementFull> {
+    pub fn available_movements_from(&self, idx: HexIdx) -> impl Iterator<Item = Movement> {
         HexDirection::variants()
             .into_iter()
             // For all directions
@@ -105,7 +105,7 @@ impl<T> Board<T> {
                 // Check if it is occupied
                 match nn_pos {
                     // Nearest neighbor is empty => We can move there
-                    None => Some(vec![MovementFull::Move {
+                    None => Some(vec![Movement::Move {
                         from: idx,
                         to: nn_idx,
                     }]),
@@ -127,7 +127,7 @@ impl<T> Board<T> {
                                     self.collect_hop_paths_from(&initial_hop);
 
                                 Some(
-                                    [MovementFull::Hops { path: initial_hop }]
+                                    [Movement::Hops { path: initial_hop }]
                                         .into_iter()
                                         .chain(further_hop_movements)
                                         .collect(),
@@ -143,7 +143,7 @@ impl<T> Board<T> {
 
 impl<T: PartialEq> Board<T> {
     /// Iterate over all available movements for a player
-    pub fn iter_player_movements(&self, player: &T) -> impl Iterator<Item = MovementFull> {
+    pub fn iter_player_movements(&self, player: &T) -> impl Iterator<Item = Movement> {
         // Iterate over all indices of the player
         self.iter_player_indices(player)
             // For each index, get all available movements
@@ -167,10 +167,10 @@ impl<T> Board<T> {
     /// Check if all intermediate indices of the movement are valid
     pub fn validate_movement<'a>(
         &self,
-        movement: &'a MovementFull,
-    ) -> Result<&'a MovementFull, MovementError> {
+        movement: &'a Movement,
+    ) -> Result<&'a Movement, MovementError> {
         match movement {
-            MovementFull::Move { from, to } => {
+            Movement::Move { from, to } => {
                 // Check starting position
                 self.get(from)
                     .map_err(|_| MovementError::InvalidIndex(*from))?
@@ -189,7 +189,7 @@ impl<T> Board<T> {
 
                 Ok(movement)
             }
-            MovementFull::Hops { path } => {
+            Movement::Hops { path } => {
                 // Check starting position
                 let start = path
                     .first()
@@ -222,46 +222,37 @@ impl<T> Board<T> {
     }
 }
 
-/// Indices of the player before and after the movement is done
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Movement {
-    pub from: HexIdx,
-    pub to: HexIdx,
-}
+/// Compact movement representation
+/// Pair composed of `from` and `to` indices
+pub type MovementIndices = [HexIdx; 2];
 
-impl MovementFull {
-    /// Get start and end indices of the movement
-    pub fn get_indices(&self) -> Movement {
-        match self {
-            MovementFull::Move { from, to } => Movement {
-                from: *from,
-                to: *to,
-            },
-            MovementFull::Hops { path } => Movement {
-                from: *path.first().unwrap(),
-                to: *path.last().unwrap(),
-            },
+/// Convert movement into pair of indices
+impl From<&Movement> for MovementIndices {
+    fn from(movement: &Movement) -> Self {
+        match movement {
+            Movement::Move { from, to } => [*from, *to],
+            Movement::Hops { path } => [*path.first().unwrap(), *path.last().unwrap()],
         }
     }
 }
 
 impl<T> Board<T> {
-    pub fn apply_movement(&mut self, indices: &Movement) -> Result<(), MovementError> {
+    pub fn apply_movement(&mut self, [from, to]: &MovementIndices) -> Result<(), MovementError> {
         let piece = self
-            .get_mut(&indices.from)
+            .get_mut(from)
             .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?
             .take()
             .ok_or(MovementError::EmptyInit)?;
         let target_pos = self
-            .get_mut(&indices.to)
+            .get_mut(to)
             .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?;
         match target_pos {
             // Target position is occupied
             Some(_) => {
                 // Place it back to the original position
-                *self.get_mut(&indices.from).unwrap() = Some(piece);
+                *self.get_mut(from).unwrap() = Some(piece);
                 // Return error
-                Err(MovementError::Occupied(indices.to))
+                Err(MovementError::Occupied(*to))
             }
             None => {
                 // Make movement
@@ -272,17 +263,17 @@ impl<T> Board<T> {
     }
 
     /// Unsafe apply movement without checking for errors
-    pub fn unsafe_apply_movement(&mut self, indices: &Movement) {
-        let piece = self.get_mut(&indices.from).unwrap().take().unwrap();
-        let target_pos = self.get_mut(&indices.to).unwrap();
+    pub fn unsafe_apply_movement(&mut self, [from, to]: &MovementIndices) {
+        let piece = self.get_mut(from).unwrap().take().unwrap();
+        let target_pos = self.get_mut(to).unwrap();
         *target_pos = Some(piece);
     }
 }
 
 impl Board<Player> {
     /// Print the board with the current movement highlighted
-    pub fn print_movement(&self, movement: &MovementFull) {
-        let indices = movement.get_indices();
+    pub fn print_movement(&self, movement: &Movement) {
+        let [_, to] = movement.into();
         for i in 0..BOARD_LENGTH {
             print!("{}", " ".repeat(i));
             for j in 0..BOARD_LENGTH {
@@ -291,7 +282,7 @@ impl Board<Player> {
                     true => match &self[idx] {
                         None => print!("󠀠󠀠󠀠󠀠   "),
                         Some(None) => {
-                            if idx == indices.to {
+                            if idx == to {
                                 print!("🟡 ");
                             } else {
                                 print!("🟠 ");

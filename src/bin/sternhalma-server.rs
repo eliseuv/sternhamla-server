@@ -18,7 +18,7 @@ use tokio::{
 
 use sternhalma_server::sterhalma::{
     Game, GameStatus,
-    board::{HexIdx, movement::Movement, player::Player},
+    board::{movement::MovementIndices, player::Player},
 };
 
 /// Capacity communication channels between local threads
@@ -49,12 +49,12 @@ enum RemoteOutMessage {
     Turn {
         /// List of available movements
         /// Each movement is represented by a pair of indices
-        movements: Vec<[HexIdx; 2]>,
+        movements: Vec<MovementIndices>,
     },
     /// Inform remote client about a player's movement
     Movement {
         player: Player,
-        movement: [HexIdx; 2],
+        movement: MovementIndices,
     },
     GameFinished {
         winner: Player,
@@ -67,7 +67,7 @@ enum RemoteOutMessage {
 #[serde(rename_all = "snake_case", tag = "type")]
 enum RemoteInMessage {
     /// Movement made by player
-    Choice { movement: [HexIdx; 2] },
+    Choice { movement: MovementIndices },
 }
 
 #[derive(Debug)]
@@ -75,7 +75,7 @@ enum ServerMessage {
     /// Players turn
     Turn {
         /// List of available movements
-        movements: Vec<[HexIdx; 2]>,
+        movements: Vec<MovementIndices>,
     },
 }
 
@@ -87,7 +87,7 @@ enum ServerBroadcast {
     /// Player made a move
     Movement {
         player: Player,
-        movement: [HexIdx; 2],
+        movement: MovementIndices,
     },
     /// Result of the game
     GameFinished { winner: Player, turns: usize },
@@ -99,7 +99,7 @@ enum ClientRequest {
     /// Disconnection request
     Disconnect,
     /// Player made a movement
-    Choice([HexIdx; 2]),
+    Choice(MovementIndices),
 }
 
 /// Packaged client request with identification
@@ -262,12 +262,9 @@ impl Server {
             log::debug!("Player {current_player} turn");
 
             // Calculate available moves
-            let movements: Vec<[HexIdx; 2]> = game
+            let movements: Vec<MovementIndices> = game
                 .iter_available_moves()
-                .map(|mv| {
-                    let Movement { from, to } = mv.get_indices();
-                    [from, to]
-                })
+                .map(|movement| (&movement).into())
                 .unique()
                 .collect();
 
@@ -332,7 +329,7 @@ impl Server {
                                         // Apply chosen movement
                                         // Since it was previously calculated, it should always be valid
                                         // TODO: Avoid type conversion since its a hot loop
-                                        let game_status = game.unsafe_apply_movement(&Movement{from: movement[0], to: movement[1]});
+                                        let game_status = game.unsafe_apply_movement(&movement);
 
                                         // Broadcast movement to all players
                                         self.broadcast_tx.send(ServerBroadcast::Movement {
@@ -361,6 +358,8 @@ impl Server {
 
                 }
             }
+
+            // TODO: Store game result and history
         }
 
         Ok(())

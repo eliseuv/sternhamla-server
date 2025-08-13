@@ -5,7 +5,7 @@ use rand_xoshiro::{Xoshiro256PlusPlus, rand_core::SeedableRng};
 
 use sternhalma_server::sterhalma::{
     Game, GameStatus,
-    board::{Board, HexIdx, hex_distance, lut, movement::Movement, player::Player},
+    board::{Board, HexIdx, hex_distance, lut, movement::MovementIndices, player::Player},
 };
 
 trait Agent {
@@ -15,7 +15,7 @@ trait Agent {
         Self: Sized;
 
     /// Select a movement based on the current state of the board
-    fn select_movement(&mut self, board: &Board<Player>) -> Movement;
+    fn select_movement(&mut self, board: &Board<Player>) -> MovementIndices;
 }
 
 struct AgentBrownian {
@@ -31,12 +31,12 @@ impl Agent for AgentBrownian {
         }
     }
 
-    fn select_movement(&mut self, board: &Board<Player>) -> Movement {
-        board
+    fn select_movement(&mut self, board: &Board<Player>) -> MovementIndices {
+        (&board
             .iter_player_movements(&self.player)
-            .map(|mv| mv.get_indices())
             .choose(&mut self.rng)
-            .unwrap()
+            .unwrap())
+            .into()
     }
 }
 
@@ -61,21 +61,24 @@ impl Agent for AgentMin {
         }
     }
 
-    fn select_movement(&mut self, board: &Board<Player>) -> Movement {
-        let movements = board
+    fn select_movement(&mut self, board: &Board<Player>) -> MovementIndices {
+        let movements: Vec<MovementIndices> = board
             .iter_player_movements(&self.player)
-            .map(|mv| mv.get_indices())
-            .collect::<Vec<_>>();
-        let mv_min = movements
+            .map(|movement| (&movement).into())
+            .collect();
+        let movement_min = movements
             .iter()
-            .filter(|mv| !self.goal.contains(&mv.from))
-            .sorted_unstable_by_key(|mv| {
-                self.goal.iter().map(|idx| hex_distance(mv.to, *idx)).min()
+            .filter(|movement| !self.goal.contains(&movement[0]))
+            .sorted_unstable_by_key(|movement| {
+                self.goal
+                    .iter()
+                    .map(|idx| hex_distance(movement[1], *idx))
+                    .min()
             })
             .nth(self.dist.sample(&mut self.rng) as usize);
-        match mv_min {
-            Some(mv) => mv.clone(),
-            None => movements.choose(&mut self.rng).unwrap().clone(),
+        match movement_min {
+            Some(movement) => *movement,
+            None => *movements.choose(&mut self.rng).unwrap(),
         }
     }
 }

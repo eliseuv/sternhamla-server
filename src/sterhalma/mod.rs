@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::sterhalma::board::{
     Board, HexIdx, InvalidBoardIndex, lut,
-    movement::{Movement, MovementError, MovementFull},
+    movement::{Movement, MovementError, MovementIndices},
     player::Player,
 };
 
@@ -151,14 +151,14 @@ impl Game {
         }
     }
 
-    pub fn iter_available_moves(&self) -> impl Iterator<Item = MovementFull> {
+    pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
         match &self.status {
             GameStatus::Finished { .. } => todo!(),
             GameStatus::Playing { player, .. } => self.board.iter_player_movements(player),
         }
     }
 
-    pub fn apply_movement(&mut self, movement: &MovementFull) -> Result<GameStatus, GameError> {
+    pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, GameError> {
         match self.status {
             GameStatus::Finished { .. } => Err(GameError::GameFinished),
             GameStatus::Playing {
@@ -166,10 +166,10 @@ impl Game {
                 ..
             } => {
                 // Check if the movement is made by the current player
-                let indices = movement.get_indices();
+                let [from, to] = movement.into();
                 if self
                     .board
-                    .get(&indices.from)
+                    .get(&from)
                     .map_err(|InvalidBoardIndex(idx)| {
                         GameError::Movement(MovementError::InvalidIndex(idx))
                     })?
@@ -185,25 +185,19 @@ impl Game {
                     .map_err(GameError::Movement)?;
 
                 // Apply the movement to the board
-                self.board.unsafe_apply_movement(&indices);
-
-                // Update game history
-                self.history.push([indices.from, indices.to]);
-
-                // Update game status
-                self.status = self.next_status();
+                self.unsafe_apply_movement(&[from, to]);
 
                 Ok(self.status)
             }
         }
     }
 
-    pub fn unsafe_apply_movement(&mut self, indices: &Movement) -> GameStatus {
+    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) -> GameStatus {
         // Unsafe apply movement without checking for errors
         self.board.unsafe_apply_movement(indices);
 
         // Update game history
-        self.history.push([indices.from, indices.to]);
+        self.history.push(*indices);
 
         // Update game status
         self.status = self.next_status();
