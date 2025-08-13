@@ -34,23 +34,6 @@ struct Args {
     socket: PathBuf,
 }
 
-/// Compact representation of movement indices for serialization
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-struct MovementList(Vec<[HexIdx; 2]>);
-
-impl MovementList {
-    /// Create a new compact movement list from a vector of movements
-    fn new(movements: Vec<Movement>) -> Self {
-        MovementList(
-            movements
-                .into_iter()
-                .map(|indices| [indices.from, indices.to])
-                .collect(),
-        )
-    }
-}
-
 /// Local Client Thread -> Remote Client
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -63,8 +46,9 @@ enum RemoteOutMessage {
     Disconnect,
     /// Inform remote client that it is their turn
     Turn {
-        /// Provide list of available movements
-        movements: MovementList,
+        /// List of available movements
+        /// Each movement is represented by a pair of indices
+        movements: Vec<[HexIdx; 2]>,
     },
     /// Inform remote client about a player's movement
     Movement {
@@ -90,7 +74,7 @@ enum ServerMessage {
     /// Players turn
     Turn {
         /// List of available movements
-        movements: MovementList,
+        movements: Vec<[HexIdx; 2]>,
     },
 }
 
@@ -100,7 +84,10 @@ enum ServerBroadcast {
     /// Disconnection signal,
     Disconnect,
     /// Player made a move
-    Movement { player: Player, movement: Movement },
+    Movement {
+        player: Player,
+        movement: [HexIdx; 2],
+    },
     /// Result of the game
     GameFinished { winner: Player, turns: usize },
 }
@@ -255,17 +242,18 @@ impl Server {
         {
             println!("{game}", game = self.game);
             log::debug!("Player {current_player} turn");
+
             // Calculate available moves
-            let movements = MovementList(
-                self.game
-                    .iter_available_moves()
-                    .map(|movement| {
-                        let Movement { from, to } = movement.get_indices();
-                        [from, to]
-                    })
-                    .unique()
-                    .collect(),
-            );
+            let movements: Vec<[HexIdx; 2]> = self
+                .game
+                .iter_available_moves()
+                .map(|mv| {
+                    let Movement { from, to } = mv.get_indices();
+                    [from, to]
+                })
+                .unique()
+                .collect();
+
             // Send turn message to current player
             self.clients_tx
                 .get_mut(&current_player)
@@ -293,12 +281,12 @@ impl Server {
 
                                 // Handle request
                                 match message.request {
+                                    // Client will disconnect
                                     ClientRequest::Disconnect => {
-                                        log::error!("Player {player} disconnected mid-game");
-                                        // Finish the game
                                         bail!("Player {player} disconnected mid-game");
                                     }
 
+                                    // Client chose a movement
                                     ClientRequest::Choice(movement) => {
                                         // Check if player is the current player
                                         if player != current_player {
@@ -306,21 +294,19 @@ impl Server {
                                             continue;
                                         }
 
-                                        // Select chosen movement from list
-                                        if !movements.0.contains(&movement){
+                                        // Validate movement
+                                        if !movements.contains(&movement){
                                             log::error!("Player {player} chose invalid movement {movement:?}");
+                                            // TODO: Inform client of the error
                                             continue;
                                         }
 
-                                        let movement = Movement {
-                                            from: movement[0],
-                                            to: movement[1],
-                                        };
                                         log::debug!("Player {player} chose movement {movement:?}");
 
                                         // Apply chosen movement
                                         // Since it was previously calculated, it should always be valid
-                                        let game_status = self.game.unsafe_apply_movement(&movement);
+                                        // TODO: Avoid type conversion since its a hot loop
+                                        let game_status = self.game.unsafe_apply_movement(&Movement{from: movement[0], to: movement[1]});
 
                                         // Broadcast movement to all players
                                         self.broadcast_tx.send(ServerBroadcast::Movement {
@@ -511,11 +497,8 @@ impl Client {
                     .await?;
             }
             ServerBroadcast::Movement { player, movement } => {
-                self.send_remote_message(RemoteOutMessage::Movement {
-                    player,
-                    movement: [movement.from, movement.to],
-                })
-                .await?;
+                self.send_remote_message(RemoteOutMessage::Movement { player, movement })
+                    .await?;
             }
             ServerBroadcast::GameFinished { winner, turns } => {
                 self.send_remote_message(RemoteOutMessage::GameFinished { winner, turns })
