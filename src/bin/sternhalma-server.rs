@@ -270,7 +270,9 @@ impl Server {
                     movements: movements.clone(),
                 })
                 .await
-                .with_context(|| "Failed to send turn message to player {current_player}")?;
+                .with_context(|| {
+                    format!("Failed to send turn message to player {current_player}")
+                })?;
 
             loop {
                 tokio::select! {
@@ -466,9 +468,9 @@ impl Client {
         self.stream
             .read_exact(&mut self.buffer_in[..message_length])
             .await
-            .with_context(
-                || "Failed to receive message of length {message_length} from remote client",
-            )?;
+            .with_context(|| {
+                format!("Failed to receive message of length {message_length} from remote client")
+            })?;
         log::debug!(
             "[Player {}] Remote message receive successfully: {}",
             self.player,
@@ -706,7 +708,7 @@ async fn main() -> Result<()> {
 
     // Bind TCP listener to the socket address
     let listener =
-        UnixListener::bind(&args.socket).with_context(|| "Failed to bind TCP listener")?;
+        UnixListener::bind(&args.socket).with_context(|| "Failed to bind listener to socket")?;
     log::info!("Lisening at {socket:?}", socket = args.socket);
 
     tokio::select! {
