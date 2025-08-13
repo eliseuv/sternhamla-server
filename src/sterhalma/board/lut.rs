@@ -2,7 +2,7 @@ use super::HexIdx;
 
 /// Valid positions of Sternhalma board forming a star
 #[rustfmt::skip]
-pub(crate) const VALID_POSITIONS: [HexIdx; 121] = [
+pub const VALID_POSITIONS: [HexIdx; 121] = [
                                            [0,12],
                                        [1,11],[1,12],
                                     [2,10],[2,11],[2,12],
@@ -24,7 +24,7 @@ pub(crate) const VALID_POSITIONS: [HexIdx; 121] = [
 
 /// Starting positions of player 1
 #[rustfmt::skip]
-pub(crate) const PLAYER1_STARTING_POSITIONS: [HexIdx; 15] = [
+pub const PLAYER1_STARTING_POSITIONS: [HexIdx; 15] = [
 [12,4],[12,5],[12,6],[12,7],[12,8],
     [13,4],[13,5],[13,6],[13,7],
        [14,4],[14,5],[14,6],
@@ -34,7 +34,7 @@ pub(crate) const PLAYER1_STARTING_POSITIONS: [HexIdx; 15] = [
 
 /// Starting positions of player 2
 #[rustfmt::skip]
-pub(crate) const PLAYER2_STARTING_POSITIONS: [HexIdx; 15] = [
+pub const PLAYER2_STARTING_POSITIONS: [HexIdx; 15] = [
             [0,12],
         [1,11],[1,12],
      [2,10],[2,11],[2,12],
