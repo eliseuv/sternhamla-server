@@ -4,5 +4,5 @@
 /// Starhalma game
 pub mod sterhalma;
 
-/// Representation of byte sizes
+/// Human readable representation of data sizes
 pub mod bytes_sizes;
