@@ -49,7 +49,7 @@ pub struct Game {
     /// Game status
     status: GameStatus,
     /// Game history
-    history: Vec<[HexIdx; 2]>,
+    history: Vec<MovementIndices>,
 }
 
 impl Display for Game {
