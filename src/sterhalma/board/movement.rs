@@ -17,22 +17,6 @@ pub enum Movement {
 }
 
 impl Movement {
-    /// Get the origin index of the movement
-    pub fn from(&self) -> &HexIdx {
-        match self {
-            Movement::Move { from, .. } => from,
-            Movement::Hops { path } => path.first().unwrap(),
-        }
-    }
-
-    /// Get the destination index of the movement
-    pub fn to(&self) -> &HexIdx {
-        match self {
-            Movement::Move { to, .. } => to,
-            Movement::Hops { path } => path.last().unwrap(),
-        }
-    }
-
     /// Check if the movement contains a specific index
     fn contains(&self, idx: &HexIdx) -> bool {
         match self {
