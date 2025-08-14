@@ -1,9 +1,11 @@
 use std::{
-    fmt::Debug,
+    fmt::{Debug, Display},
     ops::{Index, IndexMut},
 };
 
 use anyhow::Result;
+
+use crate::sterhalma::board::player::Player;
 
 /// Length of the Sternhalma board
 const BOARD_LENGTH: usize = 17;
@@ -286,3 +288,34 @@ impl<T: PartialEq> Board<T> {
 pub mod movement;
 
 pub mod player;
+
+impl Board<Player> {
+    /// Creates a new Sternhalma board with pieces placed in their starting positions
+    pub fn new() -> Self {
+        unsafe {
+            Self::empty()
+                .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Player::Player1)
+                .unwrap_unchecked()
+                .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Player::Player2)
+                .unwrap_unchecked()
+        }
+    }
+}
+
+/// Board display
+impl Display for Board<Player> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..BOARD_LENGTH {
+            write!(f, "{}", " ".repeat(i))?;
+            for j in 0..BOARD_LENGTH {
+                match &self[[i, j]] {
+                    None => write!(f, "󠀠󠀠󠀠󠀠   ")?,
+                    Some(None) => write!(f, "⚫ ")?,
+                    Some(Some(player)) => write!(f, "{piece} ", piece = player.piece())?,
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
