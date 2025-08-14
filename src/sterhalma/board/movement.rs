@@ -165,16 +165,19 @@ pub enum MovementError {
 
 impl<T> Board<T> {
     /// Check if all intermediate indices of the movement are valid
-    pub fn validate_movement<'a>(
-        &self,
-        movement: &'a Movement,
-    ) -> Result<&'a Movement, MovementError> {
+    /// If valid, returns the movement and the player that would perform it
+    pub fn validate_movement<'a, 'b>(
+        &'a self,
+        movement: &'b Movement,
+    ) -> Result<(&'b Movement, &'a T), MovementError> {
         match movement {
             Movement::Move { from, to } => {
-                // Check starting position
-                self.get(from)
-                    .map_err(|_| MovementError::InvalidIndex(*from))?
+                // Check if starting position is valid
+                let player = self
+                    .get(from)
+                    .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?
                     .as_ref()
+                    // Check if starting position is occupied
                     .ok_or(MovementError::EmptyInit)?;
 
                 // Check if the destination position is empty
@@ -187,14 +190,15 @@ impl<T> Board<T> {
                     return Err(MovementError::Occupied(*to));
                 }
 
-                Ok(movement)
+                Ok((movement, player))
             }
             Movement::Hops { path } => {
                 // Check starting position
                 let start = path
                     .first()
                     .ok_or(MovementError::ShortHopping(path.len()))?;
-                self.get(start)
+                let player = self
+                    .get(start)
                     .map_err(|_| MovementError::InvalidIndex(*start))?
                     .as_ref()
                     .ok_or(MovementError::EmptyInit)?;
@@ -216,7 +220,7 @@ impl<T> Board<T> {
                             .err()
                     })
                     .map(Err)
-                    .unwrap_or(Ok(movement))
+                    .unwrap_or(Ok((movement, player)))
             }
         }
     }
