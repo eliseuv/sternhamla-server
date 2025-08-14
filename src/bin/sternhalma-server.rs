@@ -235,10 +235,11 @@ impl Server {
             .await
             .with_context(|| "Failed to wait for players to connect")?;
 
-        let mut game_timer = GameTimer::new(256);
-
         // Create game
         let mut game = Game::new();
+
+        // Game timer
+        let mut game_timer = GameTimer::<256>::new();
 
         // Main game loop
         while let GameStatus::Playing {
@@ -246,23 +247,26 @@ impl Server {
             ..
         } = game.status()
         {
+            log::debug!("Player {current_player} turn");
+
             // Update timing
             game_timer.on_trigger(&game, |timer| {
+                // Calculate size of game history in memory
+                let hist_size: ByteSize = game.history_bytes().into();
+                // Log information
                 log::info!(
-                    "Turns: {turns} | Rate: {rate:.2} turns/s | History: {hist_size}",
+                    "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
                     turns = game.status().turns(),
                     rate = timer.turns_rate(),
-                    hist_size = Into::<ByteSize>::into(game.history_bytes())
                 )
             });
 
+            // // Print board state
+            // game_timer.update(&game);
             // println!(
-            //     "{game}\tRate: {turns_rate:.1} turns/s\tHistory: {hist_size}",
-            //     turns_rate = game_timer.turns_rate(),
-            //     hist_size = game_timer.hist_size()
+            //     "{game} | Rate: {rate:.2} turn/s",
+            //     rate = game_timer.turns_rate(),
             // );
-
-            log::debug!("Player {current_player} turn");
 
             // Calculate available moves
             let movements: Vec<MovementIndices> = game
@@ -283,6 +287,7 @@ impl Server {
                     format!("Failed to send turn message to player {current_player}")
                 })?;
 
+            // Message receiving loop
             loop {
                 tokio::select! {
 
@@ -314,6 +319,7 @@ impl Server {
 
                                     // Client chose a movement
                                     ClientRequest::Choice(movement) => {
+
                                         // // Check if player is the current player
                                         // if player != current_player {
                                         //     log::error!("Player {player} attempted to move out of turn");

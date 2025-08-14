@@ -1,41 +1,50 @@
 use tokio::time::Instant;
 
-pub struct GameTimer {
-    /// Number of turns between each update
-    n_turns: usize,
+pub struct GameTimer<const N_TURNS: usize> {
     /// Timer to measure the time elapsed for each interval
     timer: Instant,
     /// Number of turns per second for the interval
     turns_rate: f64,
 }
 
-impl GameTimer {
-    pub fn new(n_turns: usize) -> Self {
+impl<const N_TURNS: usize> GameTimer<N_TURNS> {
+    pub fn new() -> Self {
         Self {
-            n_turns,
             timer: Instant::now(),
-            turns_rate: 0.0,
+            turns_rate: f64::NAN,
         }
     }
 
-    pub fn turns_rate(&self) -> f64 {
+    #[inline(always)]
+    pub const fn turns_rate(&self) -> f64 {
         self.turns_rate
     }
+}
 
+impl<const N_TURNS: usize> Default for GameTimer<N_TURNS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N_TURNS: usize> GameTimer<N_TURNS> {
     #[inline(always)]
     pub fn update(&mut self, game: &super::Game) {
-        if game.status.turns() % self.n_turns == 0 {
-            self.turns_rate = self.n_turns as f64 / self.timer.elapsed().as_secs_f64();
+        if game.status.turns() % N_TURNS == 0 {
+            self.turns_rate = N_TURNS as f64 / self.timer.elapsed().as_secs_f64();
             self.timer = Instant::now();
         }
     }
 
     #[inline(always)]
-    pub fn on_trigger<F: Fn(&Self)>(&mut self, game: &super::Game, f: F) {
-        if game.status.turns() % self.n_turns == 0 {
-            self.turns_rate = self.n_turns as f64 / self.timer.elapsed().as_secs_f64();
+    pub fn on_trigger<F>(&mut self, game: &super::Game, func: F)
+    where
+        F: Fn(&Self),
+    {
+        if game.status.turns() % N_TURNS == 0 {
+            self.turns_rate = N_TURNS as f64 / self.timer.elapsed().as_secs_f64();
 
-            f(&*self);
+            func(&*self);
 
             self.timer = Instant::now();
         }

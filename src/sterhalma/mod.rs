@@ -36,10 +36,10 @@ impl Display for GameStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GameStatus::Playing { player, turns } => {
-                write!(f, "Playing: {player}\tTurn: {turns}")
+                write!(f, "Playing: {player} | Turn: {turns}")
             }
             GameStatus::Finished { winner, turns } => {
-                write!(f, "Winner: {winner}\tTotal turns: {turns}")
+                write!(f, "Winner: {winner} | Total turns: {turns}")
             }
         }
     }
