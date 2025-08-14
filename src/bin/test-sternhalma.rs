@@ -101,7 +101,9 @@ fn main() {
         };
 
         let movement = agent.select_movement(game.board());
-        game.unsafe_apply_movement(&movement);
+        unsafe {
+            game.apply_movement_unchecked(&movement);
+        }
         println!("{game}");
     }
 }

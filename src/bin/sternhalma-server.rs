@@ -328,8 +328,7 @@ impl Server {
 
                                         // Apply chosen movement
                                         // Since it was previously calculated, it should always be valid
-                                        // TODO: Avoid type conversion since its a hot loop
-                                        let game_status = game.unsafe_apply_movement(&movement);
+                                        let game_status = unsafe { game.apply_movement_unchecked(&movement) };
 
                                         // Broadcast movement to all players
                                         self.broadcast_tx.send(ServerBroadcast::Movement {

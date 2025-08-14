@@ -192,6 +192,7 @@ impl<T> Board<T> {
 
                 Ok((movement, player))
             }
+
             Movement::Hops { path } => {
                 // Check starting position
                 let start = path
@@ -241,35 +242,29 @@ impl From<&Movement> for MovementIndices {
 }
 
 impl<T> Board<T> {
-    pub fn apply_movement(&mut self, [from, to]: &MovementIndices) -> Result<(), MovementError> {
-        let piece = self
-            .get_mut(from)
-            .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?
-            .take()
-            .ok_or(MovementError::EmptyInit)?;
-        let target_pos = self
-            .get_mut(to)
-            .map_err(|InvalidBoardIndex(idx)| MovementError::InvalidIndex(idx))?;
-        match target_pos {
-            // Target position is occupied
-            Some(_) => {
-                // Place it back to the original position
-                *self.get_mut(from).unwrap() = Some(piece);
-                // Return error
-                Err(MovementError::Occupied(*to))
-            }
-            None => {
-                // Make movement
-                *target_pos = Some(piece);
-                Ok(())
-            }
+    /// Apply movement to the board
+    pub fn apply_movement(&mut self, movement: &Movement) -> Result<(), MovementError> {
+        let (movement, _) = self.validate_movement(movement)?;
+        unsafe {
+            self.apply_movement_unchecked(&movement.into());
         }
+        Ok(())
     }
 
-    /// Unsafe apply movement without checking for errors
-    pub fn unsafe_apply_movement(&mut self, [from, to]: &MovementIndices) {
-        let piece = self.get_mut(from).unwrap().take().unwrap();
-        let target_pos = self.get_mut(to).unwrap();
+    /// Apply movement on the board without checking for errors
+    ///
+    /// # Safety
+    ///
+    /// It is advised have validated the movement on the current board beforehand
+    #[inline(always)]
+    pub unsafe fn apply_movement_unchecked(&mut self, [from, to]: &MovementIndices) {
+        let piece = unsafe {
+            self.get_mut(from)
+                .unwrap_unchecked()
+                .take()
+                .unwrap_unchecked()
+        };
+        let target_pos = unsafe { self.get_mut(to).unwrap_unchecked() };
         *target_pos = Some(piece);
     }
 }

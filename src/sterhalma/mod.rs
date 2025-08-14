@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use anyhow::Result;
 
 use crate::sterhalma::board::{
-    Board, HexIdx, InvalidBoardIndex, lut,
+    Board, HexIdx, lut,
     movement::{Movement, MovementError, MovementIndices},
     player::Player,
 };
@@ -161,6 +161,7 @@ impl Game {
         }
     }
 
+    /// Apply movement to the current game
     pub fn apply_movement(&mut self, movement: &Movement) -> Result<GameStatus, GameError> {
         match self.status {
             GameStatus::Finished { .. } => Err(GameError::GameFinished),
@@ -168,39 +169,40 @@ impl Game {
                 player: current_player,
                 ..
             } => {
-                // Check if the movement is made by the current player
-                let [from, to] = movement.into();
-                if self
+                // Validate movement
+                let (movement, player) = self
                     .board
-                    .get(&from)
-                    .map_err(|InvalidBoardIndex(idx)| {
-                        GameError::Movement(MovementError::InvalidIndex(idx))
-                    })?
-                    .as_ref()
-                    != Some(&current_player)
-                {
-                    return Err(GameError::OutOfTurn);
-                }
-
-                // Check if the movement is valid
-                self.board
                     .validate_movement(movement)
                     .map_err(GameError::Movement)?;
 
+                // Check if the movement is made by the current player
+                if player != &current_player {
+                    return Err(GameError::OutOfTurn);
+                }
+
                 // Apply the movement to the board
-                self.unsafe_apply_movement(&[from, to]);
+                unsafe {
+                    self.apply_movement_unchecked(&movement.into());
+                }
 
                 Ok(self.status)
             }
         }
     }
 
-    pub fn unsafe_apply_movement(&mut self, indices: &MovementIndices) -> GameStatus {
-        // Unsafe apply movement without checking for errors
-        self.board.unsafe_apply_movement(indices);
+    /// Apply movement in the game without validating it or the player
+    ///
+    /// # Safety
+    ///
+    /// It is advised have validated the movement on the current board and check the player's turn beforehand
+    pub unsafe fn apply_movement_unchecked(&mut self, movement: &MovementIndices) -> GameStatus {
+        // Apply movement on the board
+        unsafe {
+            self.board.apply_movement_unchecked(movement);
+        }
 
         // Update game history
-        self.history.push(*indices);
+        self.history.push(*movement);
 
         // Update game status
         self.status = self.next_status();
