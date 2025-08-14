@@ -114,7 +114,10 @@ impl Game {
     fn next_status(&self) -> GameStatus {
         match self.status {
             // Game finished is absorbing state
-            GameStatus::Finished { .. } => self.status,
+            GameStatus::Finished { .. } => {
+                log::warn!("Attempting to update state of finished game");
+                self.status
+            }
             // Game is ongoing
             GameStatus::Playing { player, turns } => {
                 // Check if game is finished
