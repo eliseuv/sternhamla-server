@@ -11,6 +11,9 @@ use crate::sterhalma::board::{
 /// Hexagonal Sternhalma board
 pub mod board;
 
+/// Statistics gathered over turns
+pub mod timing;
+
 #[derive(Debug, Clone, Copy)]
 pub enum GameStatus {
     /// Which piece is currently playing and the last movement made
@@ -54,7 +57,7 @@ pub struct Game {
 
 impl Display for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
+        write!(
             f,
             "{board}{status}",
             board = self.board,

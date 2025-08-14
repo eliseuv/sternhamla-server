@@ -13,12 +13,15 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     sync::{broadcast, mpsc, oneshot},
-    time::Instant,
 };
 
-use sternhalma_server::sterhalma::{
-    Game, GameStatus,
-    board::{movement::MovementIndices, player::Player},
+use sternhalma_server::{
+    bytes_sizes::ByteSize,
+    sterhalma::{
+        Game, GameStatus,
+        board::{movement::MovementIndices, player::Player},
+        timing::GameTimer,
+    },
 };
 
 /// Capacity communication channels between local threads
@@ -232,10 +235,7 @@ impl Server {
             .await
             .with_context(|| "Failed to wait for players to connect")?;
 
-        // Variables for calculation of average turn rate
-        const N_TURNS: usize = 128;
-        let mut turns_timer = Instant::now();
-        let mut turns_rate = 0.0;
+        let mut game_timer = GameTimer::new(256);
 
         // Create game
         let mut game = Game::new();
@@ -246,18 +246,21 @@ impl Server {
             ..
         } = game.status()
         {
-            // Calculate average turn rate
-            if game.status().turns() % N_TURNS == 0 {
-                turns_rate = N_TURNS as f64 / turns_timer.elapsed().as_secs_f64();
-                turns_timer = Instant::now();
+            // Update timing
+            game_timer.on_trigger(&game, |timer| {
                 log::info!(
-                    "Turn: {turn} Rate: {turns_rate:.1} turns/s History: {hist_kb}KB",
-                    turn = game.status().turns(),
-                    hist_kb = game.history_bytes() as f64 / 1024.0
-                );
-            }
+                    "Turns: {turns} | Rate: {rate:.2} turns/s | History: {hist_size}",
+                    turns = game.status().turns(),
+                    rate = timer.turns_rate(),
+                    hist_size = Into::<ByteSize>::into(game.history_bytes())
+                )
+            });
 
-            // println!("{game}Rate: {turns_rate:.1} turns/s");
+            // println!(
+            //     "{game}\tRate: {turns_rate:.1} turns/s\tHistory: {hist_size}",
+            //     turns_rate = game_timer.turns_rate(),
+            //     hist_size = game_timer.hist_size()
+            // );
 
             log::debug!("Player {current_player} turn");
 
