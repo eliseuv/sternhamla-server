@@ -32,11 +32,13 @@ impl Agent for AgentBrownian {
     }
 
     fn select_movement(&mut self, board: &Board<Player>) -> MovementIndices {
-        (&board
-            .iter_player_movements(&self.player)
-            .choose(&mut self.rng)
-            .unwrap())
-            .into()
+        unsafe {
+            (&board
+                .iter_player_movements(&self.player)
+                .choose(&mut self.rng)
+                .unwrap_unchecked())
+                .into()
+        }
     }
 }
 
@@ -78,7 +80,7 @@ impl Agent for AgentMin {
             .nth(self.dist.sample(&mut self.rng) as usize);
         match movement_min {
             Some(movement) => *movement,
-            None => *movements.choose(&mut self.rng).unwrap(),
+            None => unsafe { *movements.choose(&mut self.rng).unwrap_unchecked() },
         }
     }
 }

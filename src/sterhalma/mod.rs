@@ -120,24 +120,22 @@ impl Game {
             }
             // Game is ongoing
             GameStatus::Playing { player, turns } => {
-                // Check if game is finished
-                if lut::PLAYER2_STARTING_POSITIONS.iter().all(|idx| {
-                    self.board
-                        .get(idx)
-                        .expect("Invalid index in Player 2 starting positions")
-                        == &Some(Player::Player1)
-                }) {
+                // Check winning conditions
+                if unsafe {
+                    lut::PLAYER2_STARTING_POSITIONS
+                        .iter()
+                        .all(|idx| self.board.get(idx).unwrap_unchecked() == &Some(Player::Player1))
+                } {
                     // Player 1 has moved all pieces to the opponent's home row
                     GameStatus::Finished {
                         winner: Player::Player1,
                         turns: turns + 1,
                     }
-                } else if lut::PLAYER1_STARTING_POSITIONS.iter().all(|idx| {
-                    self.board
-                        .get(idx)
-                        .expect("Invalid index in Player 1 starting positions")
-                        == &Some(Player::Player2)
-                }) {
+                } else if unsafe {
+                    lut::PLAYER1_STARTING_POSITIONS
+                        .iter()
+                        .all(|idx| self.board.get(idx).unwrap_unchecked() == &Some(Player::Player2))
+                } {
                     // Player 2 has moved all pieces to the opponent's home row
                     GameStatus::Finished {
                         winner: Player::Player2,
@@ -154,6 +152,7 @@ impl Game {
         }
     }
 
+    /// Iterate over the available movements for the current turn's player
     pub fn iter_available_moves(&self) -> impl Iterator<Item = Movement> {
         match &self.status {
             GameStatus::Finished { .. } => todo!(),

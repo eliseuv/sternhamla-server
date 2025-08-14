@@ -28,10 +28,12 @@ pub type HexIdx = [usize; 2];
 pub fn hex_distance([q1, r1]: HexIdx, [q2, r2]: HexIdx) -> usize {
     let dq = q1.abs_diff(q2);
     let dr = r1.abs_diff(r2);
-    [dq, dr, (q1 + r1).abs_diff(q2 + r2)]
-        .into_iter()
-        .max()
-        .unwrap()
+    unsafe {
+        [dq, dr, (q1 + r1).abs_diff(q2 + r2)]
+            .into_iter()
+            .max()
+            .unwrap_unchecked()
+    }
 }
 
 /// Square macro
