@@ -1,5 +1,5 @@
 {
-  description = "Rust";
+  description = "Rust project flake";
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
