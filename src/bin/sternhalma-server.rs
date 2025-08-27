@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     io::{self, Cursor, Write},
     path::PathBuf,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -147,40 +148,40 @@ impl Server {
     }
 
     /// Wait for all players to connect
-    async fn wait_players_connect(&mut self) -> Result<()> {
-        let n_total = Player::count();
-        log::info!("Waiting for {n_total} players to connect...");
-        while self.clients_tx.len() != Player::count() {
-            // Wait for message
+    async fn wait_players_connect(&mut self, n_players: usize) -> Result<()> {
+        while self.clients_tx.len() < n_players {
+            // Wait for message from main thread
             match self
                 .main_rx
                 .recv()
                 .await
                 .ok_or(anyhow!("Channel from main thread to server close"))?
             {
+                // A client has connected
                 MainThreadMessage::ClientConnected(player, client_tx) => {
+                    // Check if player is already assigned
                     if let hash_map::Entry::Vacant(entry) = self.clients_tx.entry(player) {
                         entry.insert(client_tx);
-                        log::info!("Player {player} connected");
+                        log::info!(
+                            "Player {player} connected. ({n_connected}/{n_players})",
+                            n_connected = self.clients_tx.len()
+                        );
                     } else {
                         log::error!("Player {player} is already connected");
+                        // TODO: Inform main thread about wrong assignment of player
+                        continue;
                     }
                 }
             }
-            log::info!(
-                "Players connected: {n_players}/{n_total}",
-                n_players = self.clients_tx.len()
-            );
         }
         log::info!(
-            "All {n_players} player connected",
-            n_players = self.clients_tx.len()
+            "All {n_connected} players connected",
+            n_connected = self.clients_tx.len()
         );
         Ok(())
     }
 
     async fn disconnect_players(&mut self) -> Result<()> {
-        log::info!("Disconnecting all players");
         let _ = self
             .broadcast_tx
             .send(ServerBroadcast::Disconnect)
@@ -364,12 +365,18 @@ impl Server {
     }
 
     /// Main server thread loop
-    async fn run(&mut self, max_turns: usize) -> Result<()> {
+    async fn run(&mut self, timeout: Duration, max_turns: usize) -> Result<()> {
         log::trace!("Server thread started");
 
         // Wait for players to connect
-        self.wait_players_connect()
+        let n_players = Player::count();
+        log::info!(
+            "Waiting {timeout_secs} seconds for {n_players} players to connect...",
+            timeout_secs = timeout.as_secs()
+        );
+        tokio::time::timeout(timeout, self.wait_players_connect(n_players))
             .await
+            .with_context(|| "Timed out waiting for players to connect")?
             .with_context(|| "Failed to wait for players to connect")?;
 
         // Main game loop
@@ -407,11 +414,12 @@ impl Server {
     }
 
     /// Server thread run wrapper
-    async fn try_run(mut self, max_turns: usize) -> Result<()> {
+    async fn try_run(mut self, timeout: Duration, max_turns: usize) -> Result<()> {
         // Attempt to run server
-        let result = self.run(max_turns).await;
+        let result = self.run(timeout, max_turns).await;
 
         // Disconnect all players
+        log::info!("Disconnecting all players");
         if let Err(e) = self.disconnect_players().await {
             log::error!("Failed to disconnect all players: {e:?}");
         }
@@ -710,6 +718,8 @@ struct Args {
     /// Maximum number of turns
     #[arg(short = 'n', long, value_name = "N")]
     max_turns: usize,
+    #[arg(short, long, value_name = "SECONDS", default_value_t = 30)]
+    timeout: u64,
 }
 
 /// Error type for too many players
@@ -746,6 +756,7 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
     log::debug!("Command line arguments: {args:?}");
+    let timeout = Duration::from_secs(args.timeout);
 
     // Client threads -> Server thread
     let (client_msg_tx, client_msg_rx) = mpsc::channel::<ClientMessage>(LOCAL_CHANNEL_CAPACITY);
@@ -764,7 +775,7 @@ async fn main() -> Result<()> {
     let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx)
         .with_context(|| "Failed to create server")?;
     tokio::spawn(async move {
-        if let Err(e) = server.try_run(args.max_turns).await {
+        if let Err(e) = server.try_run(timeout, args.max_turns).await {
             log::error!("Server encountered an error: {e:?}");
         }
         log::trace!("Sending shutdown signal");
