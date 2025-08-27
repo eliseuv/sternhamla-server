@@ -29,13 +29,11 @@ const LOCAL_CHANNEL_CAPACITY: usize = 32;
 /// Maximum length of a remote message in bytes
 const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 
-/// Command line arguments
-#[derive(Debug, Parser)]
-#[command(name = "sternhalma-server", version, about)]
-struct Args {
-    /// Host IP address
-    #[arg(long)]
-    socket: PathBuf,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum GameResult {
+    Finished { winner: Player, total_turns: usize },
+    MaxTurns { total_turns: usize },
 }
 
 /// Local Client Thread -> Remote Client
@@ -43,9 +41,7 @@ struct Args {
 #[serde(rename_all = "snake_case", tag = "type")]
 enum RemoteOutMessage {
     /// Inform remote client about their assigned player
-    Assign {
-        player: Player,
-    },
+    Assign { player: Player },
     /// Disconnection signal
     Disconnect,
     /// Inform remote client that it is their turn
@@ -59,10 +55,8 @@ enum RemoteOutMessage {
         player: Player,
         movement: MovementIndices,
     },
-    GameFinished {
-        winner: Player,
-        turns: usize,
-    },
+    /// Inform remote client that the game has finished with a result
+    GameFinished { result: GameResult },
 }
 
 /// Remote Client -> Local Client Thread
@@ -92,8 +86,8 @@ enum ServerBroadcast {
         player: Player,
         movement: MovementIndices,
     },
-    /// Result of the game
-    GameFinished { winner: Player, turns: usize },
+    /// Game has finished
+    GameFinished { result: GameResult },
 }
 
 /// Local Client Thread -> Server Thread
@@ -226,8 +220,151 @@ impl Server {
         Ok(())
     }
 
+    async fn handle_turn(&mut self, game: &mut Game, current_player: Player) -> Result<GameStatus> {
+        log::debug!("Player {current_player} turn");
+
+        // Calculate available moves
+        let movements: Vec<MovementIndices> = game
+            .iter_available_moves()
+            .map(|movement| (&movement).into())
+            .unique()
+            .collect();
+
+        // Send turn message to current player
+        self.clients_tx
+            .get_mut(&current_player)
+            .ok_or(anyhow!("Unable to find player {current_player}"))?
+            .send(ServerMessage::Turn {
+                movements: movements.clone(),
+            })
+            .await
+            .with_context(|| format!("Failed to send turn message to player {current_player}"))?;
+
+        // Message receiving loop
+        loop {
+            tokio::select! {
+
+                // Message from main threat
+                main_msg = self.main_rx.recv() => {
+                    match main_msg {
+                        None => bail!("Channel from main thread closed"),
+                        Some(_) => todo!("Handle main thread message"),
+                    }
+                }
+
+                // Message from client thread
+                client_msg = self.clients_rx.recv() => {
+                    match client_msg {
+                        None => {
+                            log::error!("Channel from clients closed");
+                            bail!("Channel from client closed");
+                        }
+                        Some(message) => {
+                            // Identify client
+                            let player = message.player;
+
+                            // Handle request
+                            match message.request {
+                                // Client will disconnect
+                                ClientRequest::Disconnect => {
+                                    bail!("Player {player} disconnected mid-game");
+                                }
+
+                                // Client chose a movement
+                                ClientRequest::Choice(movement) => {
+
+                                    // Check if player is the current player
+                                    if player != current_player {
+                                        log::error!("Player {player} attempted to move out of turn");
+                                        // TODO: Inform player of the out of turn movement
+                                        continue;
+                                    }
+
+                                    log::debug!("Player {player} chose movement {movement:?}");
+
+                                    // Apply chosen movement
+                                    // Since it was previously calculated, it should always be valid
+                                    let status = unsafe { game.apply_movement_unchecked(&movement) };
+
+                                    // Broadcast movement to all players
+                                    self.broadcast_tx.send(ServerBroadcast::Movement {
+                                        player,
+                                        movement,
+                                    }).with_context(|| "Failed to broadcast movement")?;
+
+                                    return Ok(status);
+
+                                }
+                            }
+                        },
+                    }
+
+                }
+
+            }
+        }
+    }
+
+    async fn game_loop(&mut self, max_turns: usize) -> Result<GameResult> {
+        // Create game
+        let mut game = Game::new();
+
+        // Game timer
+        let mut game_timer = GameTimer::<256>::new();
+
+        loop {
+            match game.status() {
+                // Game has finished
+                GameStatus::Finished {
+                    winner,
+                    total_turns,
+                } => {
+                    return Ok(GameResult::Finished {
+                        winner,
+                        total_turns,
+                    });
+                }
+
+                // Game is ongoing
+                GameStatus::Playing {
+                    player: current_player,
+                    turns,
+                } => {
+                    // Check for maximum turns
+                    if turns >= max_turns {
+                        return Ok(GameResult::MaxTurns { total_turns: turns });
+                    }
+
+                    // Handle turn
+                    self.handle_turn(&mut game, current_player)
+                        .await
+                        .with_context(|| "Falied to handle game turn")?;
+
+                    // // Update timing
+                    // game_timer.on_trigger(&game, |timer| {
+                    //     // Calculate size of game history in memory
+                    //     let hist_size: ByteSize = game.history_bytes().into();
+                    //     // Log information
+                    //     log::info!(
+                    //         "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
+                    //         turns = game.status().turns(),
+                    //         rate = timer.turns_rate(),
+                    //     )
+                    // });
+
+                    // Print board state
+                    game_timer.update(&game);
+                    println!(
+                        "{game} | Rate: {rate:.2} turn/s",
+                        rate = game_timer.turns_rate(),
+                    );
+                }
+            }
+        }
+    }
+
     /// Main server thread loop
-    async fn run(&mut self) -> Result<()> {
+    async fn run(&mut self, max_turns: usize) -> Result<()> {
         log::trace!("Server thread started");
 
         // Wait for players to connect
@@ -235,148 +372,44 @@ impl Server {
             .await
             .with_context(|| "Failed to wait for players to connect")?;
 
-        // Create game
-        let mut game = Game::new();
-
-        // Game timer
-        let mut game_timer = GameTimer::<256>::new();
-
         // Main game loop
-        while let GameStatus::Playing {
-            player: current_player,
-            ..
-        } = game.status()
+        match self
+            .game_loop(max_turns)
+            .await
+            .with_context(|| "Game loop encountered an error")?
         {
-            log::debug!("Player {current_player} turn");
-
-            // Update timing
-            game_timer.on_trigger(&game, |timer| {
-                // Calculate size of game history in memory
-                let hist_size: ByteSize = game.history_bytes().into();
-                // Log information
-                log::info!(
-                    "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
-                    turns = game.status().turns(),
-                    rate = timer.turns_rate(),
-                )
-            });
-
-            // // Print board state
-            // game_timer.update(&game);
-            // println!(
-            //     "{game} | Rate: {rate:.2} turn/s",
-            //     rate = game_timer.turns_rate(),
-            // );
-
-            // Calculate available moves
-            let movements: Vec<MovementIndices> = game
-                .iter_available_moves()
-                .map(|movement| (&movement).into())
-                .unique()
-                .collect();
-
-            // Send turn message to current player
-            self.clients_tx
-                .get_mut(&current_player)
-                .ok_or(anyhow!("Unable to find player {current_player}"))?
-                .send(ServerMessage::Turn {
-                    movements: movements.clone(),
-                })
-                .await
-                .with_context(|| {
-                    format!("Failed to send turn message to player {current_player}")
-                })?;
-
-            // Message receiving loop
-            loop {
-                tokio::select! {
-
-                    // Message from main threat
-                    main_msg = self.main_rx.recv() => {
-                        match main_msg {
-                            None => bail!("Channel from main thread closed"),
-                            Some(_) => todo!("Handle main thread message"),
-                        }
-                    }
-
-                    // Message from client thread
-                    client_msg = self.clients_rx.recv() => {
-                        match client_msg {
-                            None => {
-                                log::error!("Channel from clients closed");
-                                break;
-                            }
-                            Some(message) => {
-                                // Identify client
-                                let player = message.player;
-
-                                // Handle request
-                                match message.request {
-                                    // Client will disconnect
-                                    ClientRequest::Disconnect => {
-                                        bail!("Player {player} disconnected mid-game");
-                                    }
-
-                                    // Client chose a movement
-                                    ClientRequest::Choice(movement) => {
-
-                                        // // Check if player is the current player
-                                        // if player != current_player {
-                                        //     log::error!("Player {player} attempted to move out of turn");
-                                        //     continue;
-                                        // }
-
-                                        // // Validate movement
-                                        // if !movements.contains(&movement){
-                                        //     log::error!("Player {player} chose invalid movement {movement:?}");
-                                        //     // TODO: Inform client of the error
-                                        //     continue;
-                                        // }
-
-                                        log::debug!("Player {player} chose movement {movement:?}");
-
-                                        // Apply chosen movement
-                                        // Since it was previously calculated, it should always be valid
-                                        let game_status = unsafe { game.apply_movement_unchecked(&movement) };
-
-                                        // Broadcast movement to all players
-                                        self.broadcast_tx.send(ServerBroadcast::Movement {
-                                            player,
-                                            movement,
-                                        }).with_context(|| "Failed to broadcast movement")?;
-
-                                        // Check if the game is finished
-                                        if let GameStatus::Finished{ winner, turns } = game_status {
-                                            log::info!("Game finished, player {winner} won");
-                                            // Broadcast game finished message
-                                            self.broadcast_tx.send(ServerBroadcast::GameFinished {
-                                                winner, turns
-                                            }).with_context(|| "Failed to broadcast game finished message")?;
-                                        }
-
-                                        // Next turn
-                                        break;
-
-                                    }
-                                }
-                            },
-                        }
-
-                    }
-
-                }
+            GameResult::MaxTurns { total_turns } => {
+                log::warn!("Game reached maximum number of turns: {total_turns}");
+                self.broadcast_tx
+                    .send(ServerBroadcast::GameFinished {
+                        result: GameResult::MaxTurns { total_turns },
+                    })
+                    .with_context(|| "Failed to broadcast maximum turns message")?;
             }
-
-            // TODO: Store game result and history
+            GameResult::Finished {
+                winner,
+                total_turns,
+            } => {
+                log::info!("Game finished, player {winner} won after {total_turns} turns");
+                // Broadcast game finished message
+                self.broadcast_tx
+                    .send(ServerBroadcast::GameFinished {
+                        result: GameResult::Finished {
+                            winner,
+                            total_turns,
+                        },
+                    })
+                    .with_context(|| "Failed to broadcast game finished message")?;
+            }
         }
 
         Ok(())
     }
 
     /// Server thread run wrapper
-    async fn try_run(mut self) -> Result<()> {
+    async fn try_run(mut self, max_turns: usize) -> Result<()> {
         // Attempt to run server
-        let result = self.run().await;
+        let result = self.run(max_turns).await;
 
         // Disconnect all players
         if let Err(e) = self.disconnect_players().await {
@@ -533,8 +566,8 @@ impl Client {
                 self.send_remote_message(RemoteOutMessage::Movement { player, movement })
                     .await?;
             }
-            ServerBroadcast::GameFinished { winner, turns } => {
-                self.send_remote_message(RemoteOutMessage::GameFinished { winner, turns })
+            ServerBroadcast::GameFinished { result } => {
+                self.send_remote_message(RemoteOutMessage::GameFinished { result })
                     .await?;
             }
         };
@@ -667,6 +700,18 @@ impl Client {
     }
 }
 
+/// Command line arguments
+#[derive(Debug, Parser)]
+#[command(name = "sternhalma-server", version, about)]
+struct Args {
+    /// Host IP address
+    #[arg(short, long, value_name = "PATH")]
+    socket: PathBuf,
+    /// Maximum number of turns
+    #[arg(short = 'n', long, value_name = "N")]
+    max_turns: usize,
+}
+
 /// Error type for too many players
 /// Can later be expanded to an enum of all different errors related to player connection
 #[derive(Debug)]
@@ -719,7 +764,7 @@ async fn main() -> Result<()> {
     let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx)
         .with_context(|| "Failed to create server")?;
     tokio::spawn(async move {
-        if let Err(e) = server.try_run().await {
+        if let Err(e) = server.try_run(args.max_turns).await {
             log::error!("Server encountered an error: {e:?}");
         }
         log::trace!("Sending shutdown signal");

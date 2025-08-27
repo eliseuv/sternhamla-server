@@ -19,7 +19,7 @@ pub enum GameStatus {
     /// Which piece is currently playing and the last movement made
     Playing { player: Player, turns: usize },
     /// Game finished
-    Finished { winner: Player, turns: usize },
+    Finished { winner: Player, total_turns: usize },
 }
 
 impl GameStatus {
@@ -27,7 +27,7 @@ impl GameStatus {
     pub fn turns(&self) -> usize {
         match self {
             GameStatus::Playing { turns, .. } => *turns,
-            GameStatus::Finished { turns, .. } => *turns,
+            GameStatus::Finished { total_turns, .. } => *total_turns,
         }
     }
 }
@@ -38,8 +38,11 @@ impl Display for GameStatus {
             GameStatus::Playing { player, turns } => {
                 write!(f, "Playing: {player} | Turn: {turns}")
             }
-            GameStatus::Finished { winner, turns } => {
-                write!(f, "Winner: {winner} | Total turns: {turns}")
+            GameStatus::Finished {
+                winner,
+                total_turns,
+            } => {
+                write!(f, "Winner: {winner} | Total turns: {total_turns}")
             }
         }
     }
@@ -132,7 +135,7 @@ impl Game {
                     // Player 1 has moved all pieces to the opponent's home row
                     GameStatus::Finished {
                         winner: Player::Player1,
-                        turns: turns + 1,
+                        total_turns: turns + 1,
                     }
                 } else if unsafe {
                     lut::PLAYER1_STARTING_POSITIONS
@@ -142,7 +145,7 @@ impl Game {
                     // Player 2 has moved all pieces to the opponent's home row
                     GameStatus::Finished {
                         winner: Player::Player2,
-                        turns: turns + 1,
+                        total_turns: turns + 1,
                     }
                 } else {
                     // Game is still ongoing, switch to the opponent
