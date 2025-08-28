@@ -323,3 +323,11 @@ impl Display for Board<Player> {
         Ok(())
     }
 }
+
+/// Get the indices of the goal positions for a given player
+pub(crate) const fn goal_indices(player: &Player) -> [[usize; 2]; 15] {
+    match player {
+        Player::Player1 => lut::PLAYER2_STARTING_POSITIONS,
+        Player::Player2 => lut::PLAYER1_STARTING_POSITIONS,
+    }
+}
