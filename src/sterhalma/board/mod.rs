@@ -342,4 +342,13 @@ impl Board<Player> {
                 .all(|idx| unsafe { self.get(&idx).unwrap_unchecked() == &Some(*player) })
         })
     }
+
+    /// Calculate the score for a given player
+    /// Number of goal positions occupied
+    pub fn score(&self, player: &Player) -> usize {
+        goal_indices(player)
+            .into_iter()
+            .filter(|idx| unsafe { self.get(idx).unwrap_unchecked() == &Some(*player) })
+            .count()
+    }
 }
