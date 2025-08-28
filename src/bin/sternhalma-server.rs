@@ -33,8 +33,14 @@ const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum GameResult {
-    Finished { winner: Player, total_turns: usize },
-    MaxTurns { total_turns: usize },
+    Finished {
+        winner: Player,
+        total_turns: usize,
+    },
+    MaxTurns {
+        total_turns: usize,
+        scores: [usize; 2],
+    },
 }
 
 /// Local Client Thread -> Remote Client
@@ -310,9 +316,13 @@ impl Server {
         // Create game
         let mut game = Game::new();
 
+        // Print initial board state
+        println!("{game}");
+
         // Game timer
         let mut game_timer = GameTimer::<256>::new();
 
+        // Game loop
         loop {
             match game.status() {
                 // Game has finished
@@ -333,7 +343,13 @@ impl Server {
                 } => {
                     // Check for maximum turns
                     if turns >= max_turns {
-                        return Ok(GameResult::MaxTurns { total_turns: turns });
+                        // Calculate scores
+                        let player1_score = game.board().score(&Player::Player1);
+                        let player2_score = game.board().score(&Player::Player2);
+                        return Ok(GameResult::MaxTurns {
+                            total_turns: turns,
+                            scores: [player1_score, player2_score],
+                        });
                     }
 
                     // Handle turn
@@ -385,11 +401,17 @@ impl Server {
             .await
             .with_context(|| "Game loop encountered an error")?
         {
-            GameResult::MaxTurns { total_turns } => {
+            GameResult::MaxTurns {
+                total_turns,
+                scores,
+            } => {
                 log::warn!("Game reached maximum number of turns: {total_turns}");
                 self.broadcast_tx
                     .send(ServerBroadcast::GameFinished {
-                        result: GameResult::MaxTurns { total_turns },
+                        result: GameResult::MaxTurns {
+                            total_turns,
+                            scores,
+                        },
                     })
                     .with_context(|| "Failed to broadcast maximum turns message")?;
             }
