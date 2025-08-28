@@ -265,8 +265,8 @@ impl<T: Copy> Board<T> {
     /// Builder
     pub fn with_pieces(
         mut self,
-        indices: &[HexIdx],
         piece: T,
+        indices: &[HexIdx],
     ) -> Result<Self, PiecePlacementError> {
         self.place_pieces(indices, piece)?;
         Ok(self)
@@ -287,8 +287,10 @@ impl<T: PartialEq> Board<T> {
     }
 }
 
+/// Movements on the board
 pub mod movement;
 
+/// Player pieces
 pub mod player;
 
 impl Board<Player> {
@@ -296,9 +298,9 @@ impl Board<Player> {
     pub fn new() -> Self {
         unsafe {
             Self::empty()
-                .with_pieces(&lut::PLAYER1_STARTING_POSITIONS, Player::Player1)
+                .with_pieces(Player::Player1, &lut::PLAYER1_STARTING_POSITIONS)
                 .unwrap_unchecked()
-                .with_pieces(&lut::PLAYER2_STARTING_POSITIONS, Player::Player2)
+                .with_pieces(Player::Player2, &lut::PLAYER2_STARTING_POSITIONS)
                 .unwrap_unchecked()
         }
     }
