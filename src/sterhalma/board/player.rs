@@ -6,9 +6,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Player {
-    #[serde(rename = "1")]
     Player1,
-    #[serde(rename = "2")]
     Player2,
 }
 
