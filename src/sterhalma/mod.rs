@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use anyhow::Result;
 
 use crate::sterhalma::board::{
-    Board, HexIdx, lut,
+    Board, HexIdx,
     movement::{Movement, MovementError, MovementIndices},
     player::Player,
 };
@@ -127,24 +127,9 @@ impl Game {
             // Game is ongoing
             GameStatus::Playing { player, turns } => {
                 // Check winning conditions
-                if unsafe {
-                    lut::PLAYER2_STARTING_POSITIONS
-                        .iter()
-                        .all(|idx| self.board.get(idx).unwrap_unchecked() == &Some(Player::Player1))
-                } {
-                    // Player 1 has moved all pieces to the opponent's home row
+                if let Some(player) = self.board.check_winner() {
                     GameStatus::Finished {
-                        winner: Player::Player1,
-                        total_turns: turns + 1,
-                    }
-                } else if unsafe {
-                    lut::PLAYER1_STARTING_POSITIONS
-                        .iter()
-                        .all(|idx| self.board.get(idx).unwrap_unchecked() == &Some(Player::Player2))
-                } {
-                    // Player 2 has moved all pieces to the opponent's home row
-                    GameStatus::Finished {
-                        winner: Player::Player2,
+                        winner: player,
                         total_turns: turns + 1,
                     }
                 } else {

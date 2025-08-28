@@ -331,3 +331,15 @@ pub(crate) const fn goal_indices(player: &Player) -> [[usize; 2]; 15] {
         Player::Player2 => lut::PLAYER1_STARTING_POSITIONS,
     }
 }
+
+impl Board<Player> {
+    /// Check if a player has won the game
+    /// A player that occupied all its goal positions
+    pub(crate) fn check_winner(&self) -> Option<Player> {
+        Player::variants().into_iter().find(|player| {
+            goal_indices(player)
+                .into_iter()
+                .all(|idx| unsafe { self.get(&idx).unwrap_unchecked() == &Some(*player) })
+        })
+    }
+}
