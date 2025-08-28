@@ -36,11 +36,11 @@ enum GameResult {
     Finished {
         winner: Player,
         total_turns: usize,
-        scores: [usize; 2],
+        scores: HashMap<Player, usize>,
     },
     MaxTurns {
         total_turns: usize,
-        scores: [usize; 2],
+        scores: HashMap<Player, usize>,
     },
 }
 

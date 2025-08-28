@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::{Debug, Display},
     ops::{Index, IndexMut},
 };
@@ -353,14 +354,10 @@ impl Board<Player> {
     }
 
     /// Calculate the scores of all players
-    pub fn get_scores(&self) -> [usize; 2] {
-        unsafe {
-            Player::variants()
-                .into_iter()
-                .map(|player| self.score(&player))
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap_unchecked()
-        }
+    pub fn get_scores(&self) -> HashMap<Player, usize> {
+        Player::variants()
+            .into_iter()
+            .map(|player| (player, self.score(&player)))
+            .collect()
     }
 }
