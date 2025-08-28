@@ -36,6 +36,7 @@ enum GameResult {
     Finished {
         winner: Player,
         total_turns: usize,
+        scores: [usize; 2],
     },
     MaxTurns {
         total_turns: usize,
@@ -330,9 +331,11 @@ impl Server {
                     winner,
                     total_turns,
                 } => {
+                    // Calculate scores
                     return Ok(GameResult::Finished {
                         winner,
                         total_turns,
+                        scores: game.board().get_scores(),
                     });
                 }
 
@@ -344,11 +347,9 @@ impl Server {
                     // Check for maximum turns
                     if turns >= max_turns {
                         // Calculate scores
-                        let player1_score = game.board().score(&Player::Player1);
-                        let player2_score = game.board().score(&Player::Player2);
                         return Ok(GameResult::MaxTurns {
                             total_turns: turns,
-                            scores: [player1_score, player2_score],
+                            scores: game.board().get_scores(),
                         });
                     }
 
@@ -418,6 +419,7 @@ impl Server {
             GameResult::Finished {
                 winner,
                 total_turns,
+                scores,
             } => {
                 log::info!("Game finished, player {winner} won after {total_turns} turns");
                 // Broadcast game finished message
@@ -426,6 +428,7 @@ impl Server {
                         result: GameResult::Finished {
                             winner,
                             total_turns,
+                            scores,
                         },
                     })
                     .with_context(|| "Failed to broadcast game finished message")?;
