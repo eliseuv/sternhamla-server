@@ -38,6 +38,14 @@ impl GameStatus {
             GameStatus::Finished { total_turns, .. } => *total_turns,
         }
     }
+
+    /// Get scores
+    pub fn scores(&self) -> [usize; PLAYER_COUNT] {
+        match self {
+            GameStatus::Playing { scores, .. } => *scores,
+            GameStatus::Finished { scores, .. } => *scores,
+        }
+    }
 }
 
 impl Display for GameStatus {

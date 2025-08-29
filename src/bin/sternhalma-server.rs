@@ -33,17 +33,19 @@ const LOCAL_CHANNEL_CAPACITY: usize = 32;
 /// Maximum length of a remote message in bytes
 const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 
+type Scores = [usize; PLAYER_COUNT];
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum GameResult {
     Finished {
         winner: Player,
         total_turns: usize,
-        scores: [usize; PLAYER_COUNT],
+        scores: Scores,
     },
     MaxTurns {
         total_turns: usize,
-        scores: [usize; PLAYER_COUNT],
+        scores: Scores,
     },
 }
 
@@ -65,6 +67,7 @@ enum RemoteOutMessage {
     Movement {
         player: Player,
         movement: MovementIndices,
+        scores: Scores,
     },
     /// Inform remote client that the game has finished with a result
     GameFinished { result: GameResult },
@@ -96,6 +99,7 @@ enum ServerBroadcast {
     Movement {
         player: Player,
         movement: MovementIndices,
+        scores: Scores,
     },
     /// Game has finished
     GameFinished { result: GameResult },
@@ -298,10 +302,7 @@ impl Server {
                                     let status = unsafe { game.apply_movement_unchecked(&movement) };
 
                                     // Broadcast movement to all players
-                                    self.broadcast_tx.send(ServerBroadcast::Movement {
-                                        player,
-                                        movement,
-                                    }).with_context(|| "Failed to broadcast movement")?;
+                                    self.broadcast_tx.send(ServerBroadcast::Movement {player,movement, scores: status.scores() }).with_context(|| "Failed to broadcast movement")?;
 
                                     return Ok(status);
 
@@ -600,9 +601,17 @@ impl Client {
                 self.send_remote_message(RemoteOutMessage::Disconnect)
                     .await?;
             }
-            ServerBroadcast::Movement { player, movement } => {
-                self.send_remote_message(RemoteOutMessage::Movement { player, movement })
-                    .await?;
+            ServerBroadcast::Movement {
+                player,
+                movement,
+                scores,
+            } => {
+                self.send_remote_message(RemoteOutMessage::Movement {
+                    player,
+                    movement,
+                    scores,
+                })
+                .await?;
             }
             ServerBroadcast::GameFinished { result } => {
                 self.send_remote_message(RemoteOutMessage::GameFinished { result })
