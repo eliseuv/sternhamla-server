@@ -2,9 +2,12 @@ use std::fmt::{Debug, Display};
 
 use serde::Serialize;
 
+pub const PLAYER_COUNT: usize = 2;
+
 /// Sternhalma players
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(usize)]
 pub enum Player {
     Player1,
     Player2,

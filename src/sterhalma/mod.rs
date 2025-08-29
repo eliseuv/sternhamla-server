@@ -3,9 +3,9 @@ use std::fmt::{Debug, Display};
 use anyhow::Result;
 
 use crate::sterhalma::board::{
-    Board, HexIdx,
+    Board, HexIdx, goal_indices,
     movement::{Movement, MovementError, MovementIndices},
-    player::Player,
+    player::{PLAYER_COUNT, Player},
 };
 
 /// Hexagonal Sternhalma board
@@ -16,10 +16,18 @@ pub mod timing;
 
 #[derive(Debug, Clone, Copy)]
 pub enum GameStatus {
-    /// Which piece is currently playing and the last movement made
-    Playing { player: Player, turns: usize },
+    /// Game is ongoing
+    Playing {
+        player: Player,
+        turns: usize,
+        scores: [usize; PLAYER_COUNT],
+    },
     /// Game finished
-    Finished { winner: Player, total_turns: usize },
+    Finished {
+        winner: Player,
+        total_turns: usize,
+        scores: [usize; PLAYER_COUNT],
+    },
 }
 
 impl GameStatus {
@@ -35,14 +43,22 @@ impl GameStatus {
 impl Display for GameStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GameStatus::Playing { player, turns } => {
-                write!(f, "Playing: {player} | Turn: {turns}")
+            GameStatus::Playing {
+                player,
+                turns,
+                scores,
+            } => {
+                write!(f, "Playing: {player} | Turn: {turns} | Scores: {scores:?}")
             }
             GameStatus::Finished {
                 winner,
                 total_turns,
+                scores,
             } => {
-                write!(f, "Winner: {winner} | Total turns: {total_turns}")
+                write!(
+                    f,
+                    "Winner: {winner} | Total turns: {total_turns} | Scores: {scores:?}"
+                )
             }
         }
     }
@@ -76,6 +92,7 @@ impl Game {
             status: GameStatus::Playing {
                 player: Player::Player1,
                 turns: 0,
+                scores: [0; PLAYER_COUNT],
             },
             history: Vec::with_capacity(128),
         }
@@ -117,7 +134,7 @@ pub enum GameError {
 
 impl Game {
     /// Update the game status based on current state of the game
-    fn next_status(&self) -> GameStatus {
+    fn next_status(&self, movement: &MovementIndices) -> GameStatus {
         match self.status {
             // Game finished is absorbing state
             GameStatus::Finished { .. } => {
@@ -125,18 +142,33 @@ impl Game {
                 self.status
             }
             // Game is ongoing
-            GameStatus::Playing { player, turns } => {
+            GameStatus::Playing {
+                player,
+                turns,
+                mut scores,
+            } => {
+                // Update game scores
+                let goal = goal_indices(&player);
+                if goal.contains(&movement[0]) {
+                    scores[player as usize] -= 1;
+                }
+                if goal.contains(&movement[1]) {
+                    scores[player as usize] += 1;
+                }
+
                 // Check winning conditions
                 if let Some(player) = self.board.check_winner() {
                     GameStatus::Finished {
                         winner: player,
                         total_turns: turns + 1,
+                        scores,
                     }
                 } else {
                     // Game is still ongoing, switch to the opponent
                     GameStatus::Playing {
                         player: player.opponent(),
                         turns: turns + 1,
+                        scores,
                     }
                 }
             }
@@ -195,7 +227,7 @@ impl Game {
         self.history.push(*movement);
 
         // Update game status
-        self.status = self.next_status();
+        self.status = self.next_status(movement);
 
         self.status
     }

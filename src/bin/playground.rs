@@ -94,7 +94,7 @@ fn main() {
     let mut agent1 = AgentMin::new(Player::Player1);
     let mut agent2 = AgentBrownian::new(Player::Player2);
 
-    while let GameStatus::Playing { player, turns } = game.status()
+    while let GameStatus::Playing { player, turns, .. } = game.status()
         && turns < 1024
     {
         let agent: &mut dyn Agent = match player {

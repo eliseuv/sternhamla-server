@@ -20,7 +20,10 @@ use sternhalma_server::{
     bytes_sizes::ByteSize,
     sterhalma::{
         Game, GameStatus,
-        board::{movement::MovementIndices, player::Player},
+        board::{
+            movement::MovementIndices,
+            player::{PLAYER_COUNT, Player},
+        },
         timing::GameTimer,
     },
 };
@@ -36,11 +39,11 @@ enum GameResult {
     Finished {
         winner: Player,
         total_turns: usize,
-        scores: HashMap<Player, usize>,
+        scores: [usize; PLAYER_COUNT],
     },
     MaxTurns {
         total_turns: usize,
-        scores: HashMap<Player, usize>,
+        scores: [usize; PLAYER_COUNT],
     },
 }
 
@@ -330,12 +333,13 @@ impl Server {
                 GameStatus::Finished {
                     winner,
                     total_turns,
+                    scores,
                 } => {
                     // Calculate scores
                     return Ok(GameResult::Finished {
                         winner,
                         total_turns,
-                        scores: game.board().get_scores(),
+                        scores,
                     });
                 }
 
@@ -343,13 +347,14 @@ impl Server {
                 GameStatus::Playing {
                     player: current_player,
                     turns,
+                    scores,
                 } => {
                     // Check for maximum turns
                     if turns >= max_turns {
                         // Calculate scores
                         return Ok(GameResult::MaxTurns {
                             total_turns: turns,
-                            scores: game.board().get_scores(),
+                            scores,
                         });
                     }
 
