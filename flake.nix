@@ -14,6 +14,7 @@
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -24,23 +25,22 @@
     {
       self,
       nixpkgs,
+      flake-utils,
       fenix,
       ...
     }:
-    let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        config.allowUnfree = true;
-        overlays = [ self.overlays.default ];
-      };
-    in
-    {
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
 
-      overlays.default = final: prev: {
+        pkgs = import nixpkgs {
+          inherit system;
+          config.allowUnfree = true;
+        };
+
         rustToolchain =
-          with fenix.packages.${prev.stdenv.hostPlatform.system};
-          combine (
+          with fenix.packages.${system};
+          (combine (
             with stable;
             [
               rustc
@@ -48,54 +48,51 @@
               rust-src
               rustfmt
               clippy
+              rust-analyzer
             ]
-          );
-      };
+          ));
 
-      devShells.${system}.default = pkgs.mkShell {
+      in
+      {
+        devShells.default = pkgs.mkShell {
+          buildInputs = [
+            rustToolchain
+          ]
+          ++ (with pkgs; [
 
-        packages = with pkgs; [
+            bacon
 
-          rustToolchain
+            # # Cargo tools
+            # cargo-watch
+            # cargo-cross
+            # cargo-fuzz
+            # cargo-nextest
+            # cargo-deny
+            # cargo-edit
 
-          rust-analyzer
-          bacon
+            # Compilation cache
+            sccache
 
-          # # Cargo tools
-          # cargo-watch
-          # cargo-cross
-          # cargo-fuzz
-          # cargo-nextest
-          # cargo-deny
-          # cargo-edit
+            # # Debugging
+            # lldb
 
-          # Compilation cache
-          sccache
+            # # https://nixos.wiki/wiki/Rust#Building_Rust_crates_that_require_external_system_libraries
+            openssl.dev
+            pkg-config
+          ]);
 
-          # # Debugging
-          # lldb
-
-          # # https://nixos.wiki/wiki/Rust#Building_Rust_crates_that_require_external_system_libraries
-          # openssl.dev
-          # pkg-config
-
-        ];
-
-        env = {
+          # Explicitly tell rust-analyzer where to find the Rust source code
+          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
           # Compilation cache
           RUSTC_WRAPPER = "sccache";
-          # Required by rust-analyzer
-          RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
           # OpenSSL config
           # PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+
+          shellHook = ''
+            cargo --version
+          '';
         };
-
-        shellHook = ''
-          cargo --version
-        '';
-
-      };
-
-    };
+      }
+    );
 
 }
