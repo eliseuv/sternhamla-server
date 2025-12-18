@@ -1,14 +1,13 @@
 use std::{
     collections::{HashMap, HashSet, hash_map},
     fmt::Display,
-    io::{self, Cursor, Write},
+    io::{self, Cursor},
     time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -16,75 +15,17 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use sternhalma_server::sternhalma::{
-    Game, GameStatus,
-    board::{
-        movement::MovementIndices,
-        player::{PLAYER_COUNT, Player},
+use sternhalma_server::{
+    protocol::{GameResult, REMOTE_MESSAGE_LENGTH, RemoteInMessage, RemoteOutMessage, Scores},
+    sternhalma::{
+        Game, GameStatus,
+        board::{movement::MovementIndices, player::Player},
+        timing::GameTimer,
     },
-    timing::GameTimer,
 };
 
 /// Capacity communication channels between local threads
 const LOCAL_CHANNEL_CAPACITY: usize = 32;
-/// Maximum length of a remote message in bytes
-const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
-
-type Scores = [usize; PLAYER_COUNT];
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum GameResult {
-    Finished {
-        winner: Player,
-        total_turns: usize,
-        scores: Scores,
-    },
-    MaxTurns {
-        total_turns: usize,
-        scores: Scores,
-    },
-}
-
-/// Local Client Thread -> Remote Client
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum RemoteOutMessage {
-    /// Welcome message with session ID
-    Welcome { session_id: Uuid, player: Player },
-    /// Reconnect reject
-    Reject(String),
-    /// Inform remote client about their assigned player
-    Assign { player: Player },
-    /// Disconnection signal
-    Disconnect,
-    /// Inform remote client that it is their turn
-    Turn {
-        /// List of available movements
-        /// Each movement is represented by a pair of indices
-        movements: Vec<MovementIndices>,
-    },
-    /// Inform remote client about a player's movement
-    Movement {
-        player: Player,
-        movement: MovementIndices,
-        scores: Scores,
-    },
-    /// Inform remote client that the game has finished with a result
-    GameFinished { result: GameResult },
-}
-
-/// Remote Client -> Local Client Thread
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum RemoteInMessage {
-    /// Hello - Request new session
-    Hello,
-    /// Reconnect - Request resume session
-    Reconnect(Uuid),
-    /// Movement made by player (index based)
-    Choice { movement_index: usize },
-}
 
 #[derive(Debug)]
 enum ServerMessage {
@@ -125,18 +66,6 @@ enum ClientRequest {
 struct ClientMessage {
     player: Player,
     request: ClientRequest,
-}
-
-impl RemoteInMessage {
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        ciborium::from_reader(bytes).with_context(|| "Failed to deserialize remote message")
-    }
-}
-
-impl RemoteOutMessage {
-    fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
-        ciborium::into_writer(self, writer).with_context(|| "Failed to serialize remote message")
-    }
 }
 
 #[derive(Debug)]
@@ -909,7 +838,7 @@ async fn main() -> Result<()> {
                     }
                     Ok((stream, _addr)) => {
                         let client_id = client_id_counter;
-                        client_id_counter += 1;
+                        // client_id_counter incremented only on successful assignment
 
                          // Handshake
                         let mut stream = stream;
@@ -947,16 +876,22 @@ async fn main() -> Result<()> {
                                     Err(e) => {
                                         log::error!("Failed to assign player to new client: {e}");
                                         // Send reject
-                                        let reject = RemoteOutMessage::Reject(e.to_string());
+                                        let reject = RemoteOutMessage::Reject { reason: e.to_string() };
                                          let mut buf = Vec::new();
                                         if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
                                             let len = buf.len() as u32;
+                                            log::debug!("Sending Reject len: {}", len);
                                             let _ = stream.write_all(&len.to_be_bytes()).await;
                                             let _ = stream.write_all(&buf).await;
+                                            let _ = stream.flush().await;
+                                            log::debug!("Sent Reject message");
+                                        } else {
+                                            log::error!("Failed to serialize Reject message");
                                         }
                                         continue;
                                     },
                                     Ok(player) => {
+                                        client_id_counter += 1;
                                         player
                                     },
                                 };
@@ -977,6 +912,8 @@ async fn main() -> Result<()> {
                                          log::error!("Failed to write welcome message: {e}");
                                          continue;
                                     }
+                                    let _ = stream.flush().await;
+                                    log::debug!("Sent Welcome message len: {}", len);
                                 } else {
                                      log::error!("Failed to serialize welcome");
                                      continue;
@@ -1010,7 +947,7 @@ async fn main() -> Result<()> {
                                     }
                                 };
                             }
-                            RemoteInMessage::Reconnect(uuid) => {
+                            RemoteInMessage::Reconnect { session_id: uuid } => {
                                  // TODO: Check if session is valid? Wait, only server knows.
                                  // We don't have access to server state here easily to validate UUID *before* connecting.
                                  // Logic: We assume it's valid, try to connect, if server accepts, good.
@@ -1058,7 +995,7 @@ async fn main() -> Result<()> {
                                      Ok(None) => {
                                          log::warn!("Unknown session {uuid}");
                                          // Send reject
-                                        let reject = RemoteOutMessage::Reject("Unknown Session".to_string());
+                                        let reject = RemoteOutMessage::Reject { reason: "Unknown Session".to_string() };
                                          let mut buf = Vec::new();
                                         if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
                                             let len = buf.len() as u32;
