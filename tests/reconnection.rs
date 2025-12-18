@@ -1,56 +1,65 @@
 use common::TestServer;
 use std::mem::drop;
 use sternhalma_server::protocol::{RemoteInMessage, RemoteOutMessage};
+use sternhalma_server::sternhalma::board::player::Player;
 
 mod common;
 
-#[test]
-fn test_reconnection() {
+#[tokio::test]
+async fn test_reconnection() {
     let server = TestServer::new().expect("Failed to start server");
 
-    // Connect Player 1
-    let mut client1 = server.client().expect("Failed to connect client 1");
+    // Connect Client 1
+    let mut client1 = server.client().await.expect("Failed to connect client 1");
     client1
         .send(RemoteInMessage::Hello)
+        .await
         .expect("Failed to send Hello 1");
-    let welcome1 = client1.recv().expect("Failed to receive Welcome 1");
+    let msg_welcome = client1.recv().await.expect("Failed to receive Welcome 1");
 
-    // Extract Session ID
-    let session_id = match welcome1 {
-        RemoteOutMessage::Welcome { session_id, .. } => session_id,
-        _ => panic!("Expected Welcome message"),
+    let session_id = match msg_welcome {
+        RemoteOutMessage::Welcome { session_id, player } => {
+            assert_eq!(player, Player::Player1);
+            session_id
+        }
+        other => panic!("Expected Welcome, got: {:?}", other),
     };
 
     // Consume Assign
-    let _ = client1.recv().expect("Failed to receive Assign 1");
+    let _assign = client1.recv().await.expect("Failed to receive Assign 1");
 
-    // Connect Player 2 to start game logic (so we are in Playing state)
-    let mut client2 = server.client().expect("Failed to connect client 2");
+    // Connect Client 2 to start game
+    let mut client2 = server.client().await.expect("Failed to connect client 2");
     client2
         .send(RemoteInMessage::Hello)
+        .await
         .expect("Failed to send Hello 2");
-    let _ = client2.recv().expect("Failed to receive Welcome 2");
-    let _ = client2.recv().expect("Failed to receive Assign 2");
+    let _ = client2.recv().await.expect("Failed to receive Welcome 2");
+    let _ = client2.recv().await.expect("Failed to receive Assign 2");
 
-    // Player 1 receives Turn
-    let _turn = client1.recv().expect("Player 1 failed to receive Turn");
+    // Client 1 receives Turn (wait for it to be sure game started)
+    let _turn = client1
+        .recv()
+        .await
+        .expect("Client 1 failed to receive Turn");
 
-    // Disconnect Player 1
+    // Simulate Client 1 Disconnect (drop client)
     drop(client1);
 
-    // Wait a bit to ensure server notices (or doesn't crash)
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // Reconnect Player 1
-    let mut client1_new = server.client().expect("Failed to connect client 1 again");
+    // Reconnect Client 1
+    let mut client1_new = server
+        .client()
+        .await
+        .expect("Failed to connect client 1 again");
     client1_new
         .send(RemoteInMessage::Reconnect { session_id })
+        .await
         .expect("Failed to send Reconnect");
 
-    // Should fail if Server crashed or rejects.
     // Expect Welcome
     let msg = client1_new
         .recv()
+        .await
         .expect("Failed to receive response after reconnect");
     match msg {
         RemoteOutMessage::Welcome {
@@ -66,12 +75,14 @@ fn test_reconnection() {
     // Should receive Assign again
     let _assign = client1_new
         .recv()
+        .await
         .expect("Failed to receive Assign after reconnect");
 
     // Should receive Turn again?
     // According to server logic, if it was My Turn, and I reconnect, server resends Turn.
     let turn_again = client1_new
         .recv()
+        .await
         .expect("Failed to receive Turn after reconnect");
     match turn_again {
         RemoteOutMessage::Turn { .. } => {}

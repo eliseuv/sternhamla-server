@@ -1,12 +1,13 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use anyhow::{Context, Result, anyhow};
 use std::process::{Child, Command, Stdio};
 use std::sync::Once;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
-use sternhalma_server::protocol::{RemoteInMessage, RemoteOutMessage};
+use futures::{SinkExt, StreamExt};
+use sternhalma_server::protocol::{ClientCodec, RemoteInMessage, RemoteOutMessage};
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 
 static BUILD_SERVER: Once = Once::new();
 
@@ -61,7 +62,7 @@ impl TestServer {
         let mut started = false;
 
         while attempts < max_attempts {
-            if let Ok(_) = TcpStream::connect(&address) {
+            if let Ok(_) = std::net::TcpStream::connect(&address) {
                 started = true;
                 break;
             }
@@ -95,9 +96,13 @@ impl TestServer {
         Ok(Self { process, address })
     }
 
-    pub fn client(&self) -> Result<TestClient> {
-        let stream = TcpStream::connect(&self.address).context("Failed to connect to server")?;
-        Ok(TestClient { stream })
+    pub async fn client(&self) -> Result<TestClient> {
+        let stream = TcpStream::connect(&self.address)
+            .await
+            .context("Failed to connect to server")?;
+        Ok(TestClient {
+            framed: Framed::new(stream, ClientCodec::new()),
+        })
     }
 }
 
@@ -109,37 +114,22 @@ impl Drop for TestServer {
 }
 
 pub struct TestClient {
-    stream: TcpStream,
+    framed: Framed<TcpStream, ClientCodec>,
 }
 
 impl TestClient {
-    pub fn send(&mut self, msg: RemoteInMessage) -> Result<()> {
-        let mut buf = Vec::new();
-        ciborium::into_writer(&msg, &mut buf)?;
-
-        let len = buf.len() as u32;
-        self.stream.write_all(&len.to_be_bytes())?;
-        self.stream.write_all(&buf)?;
-        self.stream.flush()?;
-        Ok(())
+    pub async fn send(&mut self, msg: RemoteInMessage) -> Result<()> {
+        self.framed
+            .send(msg)
+            .await
+            .context("Failed to send message")
     }
 
-    pub fn recv(&mut self) -> Result<RemoteOutMessage> {
-        let mut len_buf = [0u8; 4];
-        if let Err(e) = self.stream.read_exact(&mut len_buf) {
-            eprintln!("recv: failed to read length: {}", e);
-            return Err(e.into());
+    pub async fn recv(&mut self) -> Result<RemoteOutMessage> {
+        match self.framed.next().await {
+            Some(Ok(msg)) => Ok(msg),
+            Some(Err(e)) => Err(e.into()),
+            None => Err(anyhow!("Connection closed")),
         }
-        let len = u32::from_be_bytes(len_buf) as usize;
-        // eprintln!("recv: expecting message of length {}", len);
-
-        let mut buf = vec![0u8; len];
-        if let Err(e) = self.stream.read_exact(&mut buf) {
-            eprintln!("recv: failed to read body of length {}: {}", len, e);
-            return Err(e.into());
-        }
-
-        let msg: RemoteOutMessage = ciborium::from_reader(&buf[..])?;
-        Ok(msg)
     }
 }
