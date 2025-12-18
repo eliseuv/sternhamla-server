@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{HashMap, HashSet, hash_map},
     fmt::Display,
     io::{self, Cursor, Write},
-    path::PathBuf,
     time::Duration,
 };
 
@@ -12,20 +11,18 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
+    net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, oneshot},
 };
+use uuid::Uuid;
 
-use sternhalma_server::{
-    bytes_sizes::ByteSize,
-    sterhalma::{
-        Game, GameStatus,
-        board::{
-            movement::MovementIndices,
-            player::{PLAYER_COUNT, Player},
-        },
-        timing::GameTimer,
+use sternhalma_server::sternhalma::{
+    Game, GameStatus,
+    board::{
+        movement::MovementIndices,
+        player::{PLAYER_COUNT, Player},
     },
+    timing::GameTimer,
 };
 
 /// Capacity communication channels between local threads
@@ -53,6 +50,10 @@ enum GameResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum RemoteOutMessage {
+    /// Welcome message with session ID
+    Welcome { session_id: Uuid, player: Player },
+    /// Reconnect reject
+    Reject(String),
     /// Inform remote client about their assigned player
     Assign { player: Player },
     /// Disconnection signal
@@ -77,8 +78,12 @@ enum RemoteOutMessage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum RemoteInMessage {
-    /// Movement made by player
-    Choice { movement: MovementIndices },
+    /// Hello - Request new session
+    Hello,
+    /// Reconnect - Request resume session
+    Reconnect(Uuid),
+    /// Movement made by player (index based)
+    Choice { movement_index: usize },
 }
 
 #[derive(Debug)]
@@ -111,7 +116,7 @@ enum ClientRequest {
     /// Disconnection request
     Disconnect,
     /// Player made a movement
-    Choice(MovementIndices),
+    Choice { movement_index: usize },
 }
 
 /// Packaged client request with identification
@@ -140,6 +145,10 @@ struct Server {
     main_rx: mpsc::Receiver<MainThreadMessage>,
     // Clients list
     clients_tx: HashMap<Player, mpsc::Sender<ServerMessage>>,
+    // Session management
+    sessions: HashMap<Uuid, Player>,
+    // Disconnected players with active sessions
+    disconnected: HashSet<Player>,
     // Channel for broadcasting messages to all local client threads
     broadcast_tx: broadcast::Sender<ServerBroadcast>,
     // Channel for receiving messages from local client threads
@@ -156,6 +165,8 @@ impl Server {
         Ok(Self {
             main_rx,
             clients_tx: HashMap::new(),
+            sessions: HashMap::new(),
+            disconnected: HashSet::new(),
             broadcast_tx,
             clients_rx,
         })
@@ -172,12 +183,13 @@ impl Server {
                 .ok_or(anyhow!("Channel from main thread to server close"))?
             {
                 // A client has connected
-                MainThreadMessage::ClientConnected(player, client_tx) => {
+                MainThreadMessage::ClientConnected(player, session_id, client_tx) => {
                     // Check if player is already assigned
                     if let hash_map::Entry::Vacant(entry) = self.clients_tx.entry(player) {
                         entry.insert(client_tx);
+                        self.sessions.insert(session_id, player);
                         log::info!(
-                            "Player {player} connected. ({n_connected}/{n_players})",
+                            "Player {player} connected with session {session_id}. ({n_connected}/{n_players})",
                             n_connected = self.clients_tx.len()
                         );
                     } else {
@@ -185,6 +197,14 @@ impl Server {
                         // TODO: Inform main thread about wrong assignment of player
                         continue;
                     }
+                }
+                MainThreadMessage::ClientReconnected(..) => {
+                    log::warn!("Reconnection attempt during connection phase ignored");
+                }
+                MainThreadMessage::ClientReconnectedHandle(uuid, resp_tx) => {
+                    // Check if session exists
+                    let player = self.sessions.get(&uuid).copied();
+                    let _ = resp_tx.send(player);
                 }
             }
         }
@@ -245,15 +265,20 @@ impl Server {
             .unique()
             .collect();
 
-        // Send turn message to current player
-        self.clients_tx
-            .get_mut(&current_player)
-            .ok_or(anyhow!("Unable to find player {current_player}"))?
-            .send(ServerMessage::Turn {
-                movements: movements.clone(),
-            })
-            .await
-            .with_context(|| format!("Failed to send turn message to player {current_player}"))?;
+        // If player is disconnected, wait for reconnection logic to trigger in loop
+        if !self.disconnected.contains(&current_player) {
+            // Send turn message to current player
+            self.clients_tx
+                .get_mut(&current_player)
+                .ok_or(anyhow!("Unable to find player {current_player}"))?
+                .send(ServerMessage::Turn {
+                    movements: movements.clone(),
+                })
+                .await
+                .with_context(|| {
+                    format!("Failed to send turn message to player {current_player}")
+                })?;
+        }
 
         // Message receiving loop
         loop {
@@ -261,9 +286,37 @@ impl Server {
 
                 // Message from main threat
                 main_msg = self.main_rx.recv() => {
-                    match main_msg {
+                   match main_msg {
                         None => bail!("Channel from main thread closed"),
-                        Some(_) => todo!("Handle main thread message"),
+                        Some(MainThreadMessage::ClientReconnected(player, tx)) => {
+                            // Resume disconnected player
+                            if self.disconnected.remove(&player) {
+                                log::info!("Player {player} reconnected");
+                                self.clients_tx.insert(player, tx);
+
+                                // Resend turn if it is their turn
+                                if player == current_player {
+                                    self.clients_tx
+                                        .get_mut(&current_player)
+                                        .expect("Player just reconnected")
+                                        .send(ServerMessage::Turn {
+                                            movements: movements.clone(),
+                                        })
+                                        .await
+                                        .with_context(|| format!("Failed to send turn message to player {current_player}"))?;
+                                }
+                            } else {
+                                log::warn!("Player {player} reconnected but was not marked as disconnected");
+                            }
+                        }
+                         Some(MainThreadMessage::ClientConnected(..)) => {
+                             log::warn!("New client connected during game loop - ignored");
+                         }
+                         Some(MainThreadMessage::ClientReconnectedHandle(uuid, resp_tx)) => {
+                             // Check if session exists
+                             let player = self.sessions.get(&uuid).copied();
+                             let _ = resp_tx.send(player);
+                         }
                     }
                 }
 
@@ -282,11 +335,15 @@ impl Server {
                             match message.request {
                                 // Client will disconnect
                                 ClientRequest::Disconnect => {
-                                    bail!("Player {player} disconnected mid-game");
+                                    log::info!("Player {player} disconnected mid-game");
+                                    self.clients_tx.remove(&player);
+                                    self.disconnected.insert(player);
+                                    // We continue waiting for other players or reconnection
+                                    // This pauses the turn if it was their turn, until they reconnect or timeout
                                 }
 
                                 // Client chose a movement
-                                ClientRequest::Choice(movement) => {
+                                ClientRequest::Choice { movement_index } => {
 
                                     // Check if player is the current player
                                     if player != current_player {
@@ -295,14 +352,24 @@ impl Server {
                                         continue;
                                     }
 
+                                    // Validate movement index
+                                    let movement = match movements.get(movement_index) {
+                                        Some(m) => m,
+                                        None => {
+                                             log::warn!("Player {player} sent invalid movement index: {movement_index}");
+                                             // TODO: Inform player
+                                             continue;
+                                        }
+                                    };
+
                                     log::debug!("Player {player} chose movement {movement:?}");
 
                                     // Apply chosen movement
-                                    // Since it was previously calculated, it should always be valid
-                                    let status = unsafe { game.apply_movement_unchecked(&movement) };
+                                    // Validated by index selection
+                                    let status = unsafe { game.apply_movement_unchecked(movement) };
 
                                     // Broadcast movement to all players
-                                    self.broadcast_tx.send(ServerBroadcast::Movement {player,movement, scores: status.scores() }).with_context(|| "Failed to broadcast movement")?;
+                                    self.broadcast_tx.send(ServerBroadcast::Movement {player,movement: *movement, scores: status.scores() }).with_context(|| "Failed to broadcast movement")?;
 
                                     return Ok(status);
 
@@ -464,7 +531,7 @@ struct Client {
     /// Player assigned to client
     player: Player,
     /// TCP stream for communication with the remote client
-    stream: UnixStream,
+    stream: TcpStream,
     /// Receiver for direct message from the server
     server_rx: mpsc::Receiver<ServerMessage>,
     /// Receiver for messages broadcast by the server
@@ -480,7 +547,7 @@ struct Client {
 impl Client {
     fn new(
         player: Player,
-        stream: UnixStream,
+        stream: TcpStream,
         server_rx: mpsc::Receiver<ServerMessage>,
         broadcast_rx: broadcast::Receiver<ServerBroadcast>,
         client_tx: mpsc::Sender<ClientMessage>,
@@ -586,10 +653,11 @@ impl Client {
         );
 
         match message {
-            RemoteInMessage::Choice { movement } => self
-                .send_request(ClientRequest::Choice(movement))
+            RemoteInMessage::Choice { movement_index } => self
+                .send_request(ClientRequest::Choice { movement_index })
                 .await
                 .with_context(|| "Unable to forward message to server"),
+            _ => Ok(()), // Handshake handled separately
         }
     }
 
@@ -752,8 +820,8 @@ impl Client {
 #[command(name = "sternhalma-server", version, about)]
 struct Args {
     /// Host IP address
-    #[arg(short, long, value_name = "PATH")]
-    socket: PathBuf,
+    #[arg(short, long, value_name = "ADDRESS", default_value = "127.0.0.1:8080")]
+    socket: String,
     /// Maximum number of turns
     #[arg(short = 'n', long, value_name = "N")]
     max_turns: usize,
@@ -784,7 +852,9 @@ const fn assign_player(client_id: usize) -> Result<Player, TooManyPlayers> {
 /// Main thread message to server thread
 #[derive(Debug)]
 enum MainThreadMessage {
-    ClientConnected(Player, mpsc::Sender<ServerMessage>),
+    ClientConnected(Player, Uuid, mpsc::Sender<ServerMessage>),
+    ClientReconnected(Player, mpsc::Sender<ServerMessage>),
+    ClientReconnectedHandle(Uuid, oneshot::Sender<Option<Player>>),
 }
 
 #[tokio::main]
@@ -822,74 +892,224 @@ async fn main() -> Result<()> {
     });
 
     // Bind TCP listener to the socket address
-    let listener =
-        UnixListener::bind(&args.socket).with_context(|| "Failed to bind listener to socket")?;
+    let listener = TcpListener::bind(&args.socket)
+        .await
+        .with_context(|| "Failed to bind listener to socket")?;
     log::info!("Lisening at {socket:?}", socket = args.socket);
 
     tokio::select! {
-
         // Connections loop
-        connection = async {
-            for client_id in 0.. {
+        _ = async {
+            let mut client_id_counter = 0;
+            loop {
                 match listener.accept().await {
                     Err(e) => {
                         log::error!("Failed to accept connection: {e:?}");
                         continue;
                     }
-                    Ok((stream, addr)) => {
-                        log::info!("Accepted connection from {addr:?}");
+                    Ok((stream, _addr)) => {
+                        let client_id = client_id_counter;
+                        client_id_counter += 1;
 
-                        // Assign player to new client
-                        let player = match assign_player(client_id) {
+                         // Handshake
+                        let mut stream = stream;
+                        // 1. Wait for Hello or Reconnect
+                        let mut buffer = [0u8; REMOTE_MESSAGE_LENGTH];
+                        let mut length_buffer = [0u8; 4];
+
+                        if let Err(e) = stream.read_exact(&mut length_buffer).await {
+                             log::error!("Failed to read handshake length: {e}");
+                             continue;
+                        }
+                        let length = u32::from_be_bytes(length_buffer) as usize;
+                        if length > REMOTE_MESSAGE_LENGTH {
+                            log::error!("Handshake too large");
+                            continue;
+                        }
+                        if let Err(e) = stream.read_exact(&mut buffer[..length]).await {
+                             log::error!("Failed to read handshake: {e}");
+                             continue;
+                        }
+
+                        let message = match RemoteInMessage::from_bytes(&buffer[..length]) {
+                            Ok(m) => m,
                             Err(e) => {
-                                log::error!("Failed to assign player to new client: {e}");
-                                continue;
-                            },
-                            Ok(player) => {
-                                log::info!("New client assign: {player}");
-                                player
-                            },
-                        };
-
-                        // Server thread -> Client thread
-                        let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
-
-                        // Spawn client thread
-                        match Client::new(player, stream, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
-                            Err(e) => {
-                                log::error!("Failed to create client: {e:?}");
+                                log::error!("Invalid handshake message: {e}");
                                 continue;
                             }
-                            Ok(client) =>{
+                        };
 
-                                // Spawn client thread
-                                let task = tokio::spawn(async move {
-                                    if let Err(e) = client.try_run().await {
-                                        log::error!("Client for player {player} encountered an error: {e:?}");
+                        match message {
+                            RemoteInMessage::Hello => {
+                                // New connection
+                                // Assign player to new client
+                                let player = match assign_player(client_id) {
+                                    Err(e) => {
+                                        log::error!("Failed to assign player to new client: {e}");
+                                        // Send reject
+                                        let reject = RemoteOutMessage::Reject(e.to_string());
+                                         let mut buf = Vec::new();
+                                        if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
+                                            let len = buf.len() as u32;
+                                            let _ = stream.write_all(&len.to_be_bytes()).await;
+                                            let _ = stream.write_all(&buf).await;
+                                        }
+                                        continue;
+                                    },
+                                    Ok(player) => {
+                                        player
+                                    },
+                                };
+
+                                let session_id = Uuid::new_v4();
+                                log::info!("New client assign: {player} (Session: {session_id})");
+
+                                // Send Welcome
+                                let welcome = RemoteOutMessage::Welcome { session_id, player };
+                                let mut buf = Vec::new();
+                                if let Ok(_) = ciborium::into_writer(&welcome, &mut buf) {
+                                    let len = buf.len() as u32;
+                                    if let Err(e) = stream.write_all(&len.to_be_bytes()).await {
+                                         log::error!("Failed to write welcome length: {e}");
+                                         continue;
                                     }
-                                });
-
-                                // Send client communication channel to server
-                                if let Err(e) = main_tx.send(MainThreadMessage::ClientConnected(player, server_tx)).await {
-                                    log::error!("Failed to send client communitcation channel to server: {e:?}");
-                                    task.abort();
-                                    continue;
+                                    if let Err(e) = stream.write_all(&buf).await {
+                                         log::error!("Failed to write welcome message: {e}");
+                                         continue;
+                                    }
+                                } else {
+                                     log::error!("Failed to serialize welcome");
+                                     continue;
                                 }
 
+                                // Server thread -> Client thread
+                                let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
+
+                                // Spawn client thread
+                                match Client::new(player, stream, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
+                                    Err(e) => {
+                                        log::error!("Failed to create client: {e:?}");
+                                        continue;
+                                    }
+                                    Ok(client) =>{
+
+                                        // Spawn client thread
+                                        let task = tokio::spawn(async move {
+                                            if let Err(e) = client.try_run().await {
+                                                log::error!("Client for player {player} encountered an error: {e:?}");
+                                            }
+                                        });
+
+                                        // Send client communication channel to server
+                                        if let Err(e) = main_tx.send(MainThreadMessage::ClientConnected(player, session_id, server_tx)).await {
+                                            log::error!("Failed to send client communitcation channel to server: {e:?}");
+                                            task.abort();
+                                            continue;
+                                        }
+
+                                    }
+                                };
                             }
-                        };
-                    }
+                            RemoteInMessage::Reconnect(uuid) => {
+                                 // TODO: Check if session is valid? Wait, only server knows.
+                                 // We don't have access to server state here easily to validate UUID *before* connecting.
+                                 // Logic: We assume it's valid, try to connect, if server accepts, good.
+                                 // But we need the Player associated with UUID to spawn Client.
+                                 // The main thread does NOT know the mapping. Only Server thread does.
+                                 // DESIGN FLAW FIX: We need to ask Server to adopt this stream.
+                                 // BUT Client struct owns the stream.
+
+                                 // WORKAROUND for this iteration:
+                                 // We cannot easily validate reconnect here without shared state.
+                                 // But we can spawn a "Provisional Client" or ask Server.
+                                 // Simpler: Just allow reconnect if we can map it? No, we don't have the map.
+
+                                 // We need to change MainThreadMessage to pass the stream to the server?
+                                 // Or have the Server manage connections?
+                                 // Current arc: Main -> ClientThread. Server -> ClientThread.
+
+                                 // FIX: The server must handle the reconnection logic deeper or we need shared state.
+                                 // Let's go with shared state for simplicity in this refactor.
+                                 // Main thread maintains a minimal Session Map? No, that duplicates state.
+
+                                 // Correct approach for this architecture:
+                                 // Connection comes in. We handshake.
+                                 // If Reconnect:
+                                 // We can't know which Player it is.
+                                 // We can't spawn Client(Player).
+
+                                 // Let's modify the architecture slightly:
+                                 // Main thread keeps the Session Map?
+                                 // OR
+                                 // We ask the server "Who is session X?" via a channel?
+                                 // That requires a return channel (oneshot).
+
+                                 log::info!("Reconnection attempt with session {uuid}");
+
+                                 // Ask server for player info
+                                 let (resp_tx, resp_rx) = oneshot::channel();
+                                 if let Err(_) = main_tx.send(MainThreadMessage::ClientReconnectedHandle(uuid, resp_tx)).await {
+                                     log::error!("Server closed main channel");
+                                     continue;
+                                 }
+
+                                 let player = match resp_rx.await {
+                                     Ok(Some(p)) => p,
+                                     Ok(None) => {
+                                         log::warn!("Unknown session {uuid}");
+                                         // Send reject
+                                        let reject = RemoteOutMessage::Reject("Unknown Session".to_string());
+                                         let mut buf = Vec::new();
+                                        if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
+                                            let len = buf.len() as u32;
+                                            let _ = stream.write_all(&len.to_be_bytes()).await;
+                                            let _ = stream.write_all(&buf).await;
+                                        }
+                                         continue;
+                                     },
+                                     Err(_) => {
+                                         log::error!("Server did not reply to session query");
+                                         continue;
+                                     }
+                                 };
+
+                                 // Send Welcome (Ack)
+                                let welcome = RemoteOutMessage::Welcome { session_id: uuid, player };
+                                let mut buf = Vec::new();
+                                if let Ok(_) = ciborium::into_writer(&welcome, &mut buf) {
+                                    let len = buf.len() as u32;
+                                    let _ = stream.write_all(&len.to_be_bytes()).await;
+                                    let _ = stream.write_all(&buf).await;
+                                }
+
+                                // Spawn client
+                                let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
+                                 match Client::new(player, stream, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
+                                    Err(e) => log::error!("Failed to create client: {e:?}"),
+                                    Ok(client) => {
+                                        tokio::spawn(async move {
+                                            if let Err(e) = client.try_run().await {
+                                                 log::error!("Client error: {e:?}");
+                                            }
+                                        });
+                                        let _ = main_tx.send(MainThreadMessage::ClientReconnected(player, server_tx)).await;
+                                    }
+                                 }
+                            }
+                            _ => {
+                                log::error!("Unexpected message during handshake");
+                            }
+                        }
+
                 }
             }
-        } => {
-            connection
-        },
+            }
+        } => {},
 
         // Shutdown signal
         _ = shutdown_rx => {
             log::trace!("Shutdown singnal received");
         }
-
     }
 
     Ok(())
