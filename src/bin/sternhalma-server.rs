@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, hash_map},
     fmt::Display,
-    io::{self, Cursor},
     time::Duration,
 };
 
@@ -9,20 +8,24 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use itertools::Itertools;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, oneshot},
 };
 use uuid::Uuid;
 
+use futures::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use sternhalma_server::{
-    protocol::{GameResult, REMOTE_MESSAGE_LENGTH, RemoteInMessage, RemoteOutMessage, Scores},
+    protocol::{GameResult, RemoteInMessage, RemoteOutMessage, Scores, ServerCodec},
     sternhalma::{
         Game, GameStatus,
         board::{movement::MovementIndices, player::Player},
         timing::GameTimer,
     },
 };
+use tokio_util::codec::Framed;
 
 /// Capacity communication channels between local threads
 const LOCAL_CHANNEL_CAPACITY: usize = 32;
@@ -460,23 +463,21 @@ struct Client {
     /// Player assigned to client
     player: Player,
     /// TCP stream for communication with the remote client
-    stream: TcpStream,
+    sink: SplitSink<Framed<TcpStream, ServerCodec>, RemoteOutMessage>,
+    stream: SplitStream<Framed<TcpStream, ServerCodec>>,
     /// Receiver for direct message from the server
     server_rx: mpsc::Receiver<ServerMessage>,
     /// Receiver for messages broadcast by the server
     broadcast_rx: broadcast::Receiver<ServerBroadcast>,
     /// Sender for messages to the server thread
     client_tx: mpsc::Sender<ClientMessage>,
-    /// Buffer for incoming remote messages
-    buffer_in: [u8; REMOTE_MESSAGE_LENGTH],
-    /// Buffer for outgoing remote messages
-    buffer_out: [u8; REMOTE_MESSAGE_LENGTH],
 }
 
 impl Client {
     fn new(
         player: Player,
-        stream: TcpStream,
+        sink: SplitSink<Framed<TcpStream, ServerCodec>, RemoteOutMessage>,
+        stream: SplitStream<Framed<TcpStream, ServerCodec>>,
         server_rx: mpsc::Receiver<ServerMessage>,
         broadcast_rx: broadcast::Receiver<ServerBroadcast>,
         client_tx: mpsc::Sender<ClientMessage>,
@@ -485,12 +486,11 @@ impl Client {
 
         Ok(Self {
             player,
+            sink,
             stream,
             server_rx,
             broadcast_rx,
             client_tx,
-            buffer_in: [0; REMOTE_MESSAGE_LENGTH],
-            buffer_out: [0; REMOTE_MESSAGE_LENGTH],
         })
     }
 
@@ -500,30 +500,10 @@ impl Client {
             self.player
         );
 
-        // Serialize message to buffer
-        let mut writer = Cursor::new(&mut self.buffer_out[..]);
-        message
-            .write(&mut writer)
-            .with_context(|| "Failed to write remote message")?;
-
-        // Send the message length
-        let bytes_written = writer.position() as usize;
-        self.stream
-            .write_u32(bytes_written as u32)
+        self.sink
+            .send(message)
             .await
-            .with_context(|| "Failed to send message length to remote client")?;
-
-        // Send the actual message
-        self.stream
-            .write_all(&writer.get_ref()[..bytes_written])
-            .await
-            .with_context(|| "Failed to send message to remote client")?;
-
-        log::debug!(
-            "[Player {}] Successfully sent payload of {bytes_written} to remote client",
-            self.player,
-        );
-        Ok(())
+            .with_context(|| "Failed to send remote message")
     }
 
     async fn send_request(&mut self, request: ClientRequest) -> Result<()> {
@@ -543,36 +523,6 @@ impl Client {
             .send(message)
             .await
             .with_context(|| "Failed to send message to server")
-    }
-
-    async fn receive_remote_message(&mut self, message_length: usize) -> Result<RemoteInMessage> {
-        log::debug!(
-            "[Player {}] Message length: {message_length} bytes",
-            self.player
-        );
-        if message_length == 0 || message_length > REMOTE_MESSAGE_LENGTH {
-            // TODO: Disconnect client after a number of errors
-            bail!(
-                "[Player {}] Invalid message length: {message_length} bytes",
-                self.player
-            );
-        }
-
-        // Receive actual message
-        self.stream
-            .read_exact(&mut self.buffer_in[..message_length])
-            .await
-            .with_context(|| {
-                format!("Failed to receive message of length {message_length} from remote client")
-            })?;
-        log::debug!(
-            "[Player {}] Remote message receive successfully",
-            self.player,
-        );
-
-        // Decode message
-        RemoteInMessage::from_bytes(&self.buffer_in[..message_length])
-            .with_context(|| "Failed to decode remote message")
     }
 
     async fn handle_remote_message(&mut self, message: RemoteInMessage) -> Result<()> {
@@ -643,7 +593,6 @@ impl Client {
         .await
         .with_context(|| "Falied to send player assignment message to remote client")?;
 
-        let mut message_length_buffer = [0; 4];
         loop {
             tokio::select! {
 
@@ -676,71 +625,34 @@ impl Client {
                 }
 
                 // Incoming messages from remote client
-                remote_message = self.stream.read_exact(&mut message_length_buffer) => {
+                remote_message = self.stream.next() => {
                     log::debug!("[Player {}] New message from remote client",self.player);
                     match remote_message {
-                        Ok(0) => {
+                        Some(Ok(message)) => {
+                            if let Err(e) = self.handle_remote_message(message).await {
+                                log::error!("[Player {}] Error handling remote message: {e:?}",self.player);
+                                continue;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            log::error!("[Player {}] Failed to receive remote message: {e:?}",self.player);
+                            continue;
+                        }
+                        None => {
                             log::info!("[Player {}] Remote client disconnected",self.player);
                             break;
                         }
-                        Ok(4) => {
-                            // Message length properly received
-                            let message_length =  u32::from_be_bytes(message_length_buffer) as usize;
-                            // Receive actual message
-                            match self.receive_remote_message(message_length).await {
-                                Err(e) => {
-                                    log::error!("[Player {}] Failed to receive remote message: {e:?}",self.player);
-                                    continue;
-                                }
-                                Ok(message) => {
-                                    if let Err(e) = self.handle_remote_message(message).await {
-                                        log::error!("[Player {}] Error handling remote message: {e:?}",self.player);
-                                        continue;
-                                    }
-                                }
-                            }
-
-                        }
-                        Ok(n) => {
-                            log::error!("[Player {}] Failed to receive message length: {n}/4 bytes received", self.player);
-                            continue;
-                        }
-                        Err(e) => {
-                            match e.kind() {
-                                io::ErrorKind::UnexpectedEof => {
-                                    log::info!("[Player {}] Remote client disconnected", self.player);
-                                    break;
-                                }
-                                _ => {
-                                    log::error!("[Player {}] Failed to receive message length: {e:?}", self.player);
-                                    continue;
-                                }
-
-                            }
-                        }
                     }
                 }
-
             }
         }
 
-        Ok(())
-    }
-
-    /// Client thread run wrapper
-    async fn try_run(mut self) -> Result<()> {
-        // Attempt to run client
-        let result = self.run().await;
-
         // Send disconnect request to server
-        if let Err(e) = self.send_request(ClientRequest::Disconnect).await {
-            log::error!(
-                "[Player {}] Failed to send disconnect request to server: {e:?}",
-                self.player
-            );
-        }
+        // We ignore the error here because if the server is down, we are shutting down anyway.
+        // And we can't do much if it fails.
+        let _ = self.send_request(ClientRequest::Disconnect).await;
 
-        result
+        Ok(())
     }
 }
 
@@ -810,7 +722,7 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
     // Spawn the server task
-    let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx)
+    let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx.clone())
         .with_context(|| "Failed to create server")?;
     tokio::spawn(async move {
         if let Err(e) = server.try_run(timeout, args.max_turns).await {
@@ -841,53 +753,32 @@ async fn main() -> Result<()> {
                         // client_id_counter incremented only on successful assignment
 
                          // Handshake
-                        let mut stream = stream;
+                        let mut framed = Framed::new(stream, ServerCodec::new());
+
                         // 1. Wait for Hello or Reconnect
-                        let mut buffer = [0u8; REMOTE_MESSAGE_LENGTH];
-                        let mut length_buffer = [0u8; 4];
-
-                        if let Err(e) = stream.read_exact(&mut length_buffer).await {
-                             log::error!("Failed to read handshake length: {e}");
-                             continue;
-                        }
-                        let length = u32::from_be_bytes(length_buffer) as usize;
-                        if length > REMOTE_MESSAGE_LENGTH {
-                            log::error!("Handshake too large");
-                            continue;
-                        }
-                        if let Err(e) = stream.read_exact(&mut buffer[..length]).await {
-                             log::error!("Failed to read handshake: {e}");
-                             continue;
-                        }
-
-                        let message = match RemoteInMessage::from_bytes(&buffer[..length]) {
-                            Ok(m) => m,
-                            Err(e) => {
-                                log::error!("Invalid handshake message: {e}");
+                        let handshake = match framed.next().await {
+                            Some(Ok(msg)) => msg,
+                            Some(Err(e)) => {
+                                log::error!("Failed to read handshake: {e}");
+                                continue;
+                            }
+                            None => {
+                                log::error!("Connection closed during handshake");
                                 continue;
                             }
                         };
 
-                        match message {
+                        let player = match handshake {
                             RemoteInMessage::Hello => {
-                                // New connection
-                                // Assign player to new client
+                                // New Session
+                                let session_id = Uuid::new_v4();
+                                log::info!("New session request: {session_id}");
                                 let player = match assign_player(client_id) {
                                     Err(e) => {
                                         log::error!("Failed to assign player to new client: {e}");
                                         // Send reject
                                         let reject = RemoteOutMessage::Reject { reason: e.to_string() };
-                                         let mut buf = Vec::new();
-                                        if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
-                                            let len = buf.len() as u32;
-                                            log::debug!("Sending Reject len: {}", len);
-                                            let _ = stream.write_all(&len.to_be_bytes()).await;
-                                            let _ = stream.write_all(&buf).await;
-                                            let _ = stream.flush().await;
-                                            log::debug!("Sent Reject message");
-                                        } else {
-                                            log::error!("Failed to serialize Reject message");
-                                        }
+                                        let _ = framed.send(reject).await;
                                         continue;
                                     },
                                     Ok(player) => {
@@ -896,26 +787,12 @@ async fn main() -> Result<()> {
                                     },
                                 };
 
-                                let session_id = Uuid::new_v4();
                                 log::info!("New client assign: {player} (Session: {session_id})");
 
                                 // Send Welcome
                                 let welcome = RemoteOutMessage::Welcome { session_id, player };
-                                let mut buf = Vec::new();
-                                if let Ok(_) = ciborium::into_writer(&welcome, &mut buf) {
-                                    let len = buf.len() as u32;
-                                    if let Err(e) = stream.write_all(&len.to_be_bytes()).await {
-                                         log::error!("Failed to write welcome length: {e}");
-                                         continue;
-                                    }
-                                    if let Err(e) = stream.write_all(&buf).await {
-                                         log::error!("Failed to write welcome message: {e}");
-                                         continue;
-                                    }
-                                    let _ = stream.flush().await;
-                                    log::debug!("Sent Welcome message len: {}", len);
-                                } else {
-                                     log::error!("Failed to serialize welcome");
+                                if let Err(e) = framed.send(welcome).await {
+                                     log::error!("Failed to send Welcome: {e}");
                                      continue;
                                 }
 
@@ -923,29 +800,29 @@ async fn main() -> Result<()> {
                                 let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
 
                                 // Spawn client thread
-                                match Client::new(player, stream, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
+                                let (write, read) = framed.split();
+                                match Client::new(player, write, read, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
                                     Err(e) => {
                                         log::error!("Failed to create client: {e:?}");
                                         continue;
                                     }
-                                    Ok(client) =>{
-
-                                        // Spawn client thread
-                                        let task = tokio::spawn(async move {
-                                            if let Err(e) = client.try_run().await {
-                                                log::error!("Client for player {player} encountered an error: {e:?}");
+                                    Ok(mut client) => {
+                                        tokio::spawn(async move {
+                                            if let Err(e) = client.run().await {
+                                                log::error!("Client task error: {e:?}");
                                             }
                                         });
 
                                         // Send client communication channel to server
                                         if let Err(e) = main_tx.send(MainThreadMessage::ClientConnected(player, session_id, server_tx)).await {
                                             log::error!("Failed to send client communitcation channel to server: {e:?}");
-                                            task.abort();
+                                            // task.abort(); // No task handle here, client.run() is already spawned
                                             continue;
                                         }
 
                                     }
                                 };
+                                player
                             }
                             RemoteInMessage::Reconnect { session_id: uuid } => {
                                  // TODO: Check if session is valid? Wait, only server knows.
@@ -954,14 +831,6 @@ async fn main() -> Result<()> {
                                  // But we need the Player associated with UUID to spawn Client.
                                  // The main thread does NOT know the mapping. Only Server thread does.
                                  // DESIGN FLAW FIX: We need to ask Server to adopt this stream.
-                                 // BUT Client struct owns the stream.
-
-                                 // WORKAROUND for this iteration:
-                                 // We cannot easily validate reconnect here without shared state.
-                                 // But we can spawn a "Provisional Client" or ask Server.
-                                 // Simpler: Just allow reconnect if we can map it? No, we don't have the map.
-
-                                 // We need to change MainThreadMessage to pass the stream to the server?
                                  // Or have the Server manage connections?
                                  // Current arc: Main -> ClientThread. Server -> ClientThread.
 
@@ -996,47 +865,47 @@ async fn main() -> Result<()> {
                                          log::warn!("Unknown session {uuid}");
                                          // Send reject
                                         let reject = RemoteOutMessage::Reject { reason: "Unknown Session".to_string() };
-                                         let mut buf = Vec::new();
-                                        if let Ok(_) = ciborium::into_writer(&reject, &mut buf) {
-                                            let len = buf.len() as u32;
-                                            let _ = stream.write_all(&len.to_be_bytes()).await;
-                                            let _ = stream.write_all(&buf).await;
-                                        }
+                                        let _ = framed.send(reject).await;
                                          continue;
-                                     },
-                                     Err(_) => {
+                                     },                                     Err(_) => {
                                          log::error!("Server did not reply to session query");
                                          continue;
                                      }
                                  };
 
-                                 // Send Welcome (Ack)
+                                // Send Welcome (Ack)
                                 let welcome = RemoteOutMessage::Welcome { session_id: uuid, player };
-                                let mut buf = Vec::new();
-                                if let Ok(_) = ciborium::into_writer(&welcome, &mut buf) {
-                                    let len = buf.len() as u32;
-                                    let _ = stream.write_all(&len.to_be_bytes()).await;
-                                    let _ = stream.write_all(&buf).await;
+                                if let Err(e) = framed.send(welcome).await {
+                                     log::error!("Failed to send Welcome: {e}");
+                                     continue;
                                 }
 
-                                // Spawn client
+                                // Spawn client handler
+                                log::debug!("Creating client {player}");
+                                let (write, read) = framed.split();
                                 let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
-                                 match Client::new(player, stream, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
-                                    Err(e) => log::error!("Failed to create client: {e:?}"),
-                                    Ok(client) => {
+
+                                 match Client::new(player, write, read, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
+                                    Err(e) => {
+                                        log::error!("Failed to create client: {e:?}");
+                                        continue;
+                                    }
+                                    Ok(mut client) => {
                                         tokio::spawn(async move {
-                                            if let Err(e) = client.try_run().await {
-                                                 log::error!("Client error: {e:?}");
+                                            if let Err(e) = client.run().await {
+                                                log::error!("Client task error: {e:?}");
                                             }
                                         });
                                         let _ = main_tx.send(MainThreadMessage::ClientReconnected(player, server_tx)).await;
+                                        player
                                     }
                                  }
                             }
                             _ => {
                                 log::error!("Unexpected message during handshake");
+                                continue;
                             }
-                        }
+                        };
 
                 }
             }
