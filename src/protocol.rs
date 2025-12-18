@@ -3,8 +3,9 @@ use crate::sternhalma::board::{
     player::{PLAYER_COUNT, Player},
 };
 use anyhow::{Context, Result};
+use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 use uuid::Uuid;
 
 /// Maximum length of a remote message in bytes
@@ -70,8 +71,98 @@ impl RemoteInMessage {
     }
 }
 
-impl RemoteOutMessage {
-    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
-        ciborium::into_writer(self, writer).with_context(|| "Failed to serialize remote message")
+// Codecs
+
+#[derive(Debug)]
+pub struct ServerCodec {
+    delegate: LengthDelimitedCodec,
+}
+
+impl ServerCodec {
+    pub fn new() -> Self {
+        Self {
+            delegate: LengthDelimitedCodec::new(),
+        }
+    }
+}
+
+impl Default for ServerCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder for ServerCodec {
+    type Item = RemoteInMessage;
+    type Error = anyhow::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let bytes = match self.delegate.decode(src)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        };
+
+        ciborium::from_reader(std::io::Cursor::new(bytes))
+            .map(Some)
+            .context("Failed to deserialize remote message")
+    }
+}
+
+impl Encoder<RemoteOutMessage> for ServerCodec {
+    type Error = anyhow::Error;
+
+    fn encode(&mut self, item: RemoteOutMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(&item, &mut buf).context("Failed to serialize remote message")?;
+        self.delegate
+            .encode(Bytes::from(buf), dst)
+            .context("Failed to frame message")
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientCodec {
+    delegate: LengthDelimitedCodec,
+}
+
+impl ClientCodec {
+    pub fn new() -> Self {
+        Self {
+            delegate: LengthDelimitedCodec::new(),
+        }
+    }
+}
+
+impl Default for ClientCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder for ClientCodec {
+    type Item = RemoteOutMessage;
+    type Error = anyhow::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let bytes = match self.delegate.decode(src)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        };
+
+        ciborium::from_reader(std::io::Cursor::new(bytes))
+            .map(Some)
+            .context("Failed to deserialize remote message")
+    }
+}
+
+impl Encoder<RemoteInMessage> for ClientCodec {
+    type Error = anyhow::Error;
+
+    fn encode(&mut self, item: RemoteInMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(&item, &mut buf).context("Failed to serialize remote message")?;
+        self.delegate
+            .encode(Bytes::from(buf), dst)
+            .context("Failed to frame message")
     }
 }
