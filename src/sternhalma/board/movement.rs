@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use anyhow::Result;
 
-use crate::sterhalma::board::{
+use crate::sternhalma::board::{
     BOARD_LENGTH, Board, HexDirection, HexIdx, InvalidBoardIndex, player::Player,
 };
 

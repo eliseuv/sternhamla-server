@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Result;
 
-use crate::sterhalma::board::player::Player;
+use crate::sternhalma::board::player::Player;
 
 /// Length of the Sternhalma board
 const BOARD_LENGTH: usize = 17;

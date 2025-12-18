@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use anyhow::Result;
 
-use crate::sterhalma::board::{
+use crate::sternhalma::board::{
     Board, HexIdx, goal_indices,
     movement::{Movement, MovementError, MovementIndices},
     player::{PLAYER_COUNT, Player},

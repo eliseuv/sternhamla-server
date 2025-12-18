@@ -3,7 +3,7 @@ use rand::seq::{IndexedRandom, IteratorRandom};
 use rand_distr::{Distribution, Poisson};
 use rand_xoshiro::{Xoshiro256PlusPlus, rand_core::SeedableRng};
 
-use sternhalma_server::sterhalma::{
+use sternhalma_server::sternhalma::{
     Game, GameStatus,
     board::{Board, HexIdx, hex_distance, lut, movement::MovementIndices, player::Player},
 };
