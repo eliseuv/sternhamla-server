@@ -70,8 +70,8 @@ graph TD
     Main -->|Spawns| C2
     Main -->|Spawns| Server
 
-    C1 <-->|Unix Domain Socket| P1
-    C2 <-->|Unix Domain Socket| P2
+    C1 <-->|TCP Socket| P1
+    C2 <-->|TCP Socket| P2
 
     C1 <-->|MPSC / Broadcast| Server
     C2 <-->|MPSC / Broadcast| Server
@@ -79,25 +79,57 @@ graph TD
 
 ## Communication Protocol
 
-The server communicates via **Unix Domain Sockets** (files system based sockets), ensuring low-latency IPC for local clients.
+The server communicates via **TCP**, allowing clients to connect over the network.
+Messages are serialized using [ciborium](https://github.com/enarx/ciborium) (CBOR) and are framed with a length prefix.
 
-* **Serialization**: Messages are serialized using **CBOR** (Concise Binary Object Representation).
-* **Framing**: Each message is prefixed with a 4-byte big-endian integer indicating the payload length.
+### Connection & Framing
 
-### Message Types
+1. **Transport**: TCP
+2. **Framing**: Every message is prefixed with a **4-byte big-endian unsigned integer** representing the length of the CBOR-encoded payload in bytes.
+    * `[Length (u32 BE)] [CBOR Payload]`
 
-#### Server -> Client
+### Messages
 
-* `assign`: Tells the client which Player ID they control.
-* `turn`: Notifies the client it is their turn and provides a list of valid moves.
-* `movement`: Broadcasts a move made by any player to update local state.
-* `game_finished`: Declares the game over, with winner and stats.
-* `disconnect`: Signals the session is ending.
+All messages are strictly typed and use the `snake_case` convention.
 
-#### Client -> Server
+#### RemoteInMessage (Client -> Server)
 
-* `choice`: The client selects a move (responding to a `turn` message).
-* `disconnect`: The client is leaving.
+* `{ "type": "hello" }`: Request to start a new game/session.
+* `{ "type": "reconnect", "session_id": "UUID_STRING" }`: Request to resume an existing session.
+* `{ "type": "choice", "movement_index": INTEGER }`: Submit a move (index into the list of available moves provided by the server).
+
+#### RemoteOutMessage (Server -> Client)
+
+* `{ "type": "welcome", "session_id": "UUID_STRING", "player": "Player1" | "Player2" }`: Successful connection/reconnection.
+* `{ "type": "reject", "reason": "STRING" }`: Connection/reconnection failed.
+* `{ "type": "assign", "player": "Player1" | "Player2" }`: Informational message assigning a player identity.
+* `{ "type": "disconnect" }`: Server is shutting down the session.
+* `{ "type": "turn", "movements": [ [ [q1, r1], [q2, r2] ], ... ] }`: It is your turn. Contains a list of valid moves (start and end hex coordinates).
+* `{ "type": "movement", "player": "Player1" | "Player2", "movement": [[q1, r1], [q2, r2]], "scores": [s1, s2] }`: Broadcast of a valid move made by a player.
+* `{ "type": "game_finished", "result": GameResult }`: The game has ended.
+
+## Development & Testing
+
+This project includes a comprehensive integration test suite to verify server behavior, network protocol, and game logic.
+
+### Running Tests
+
+```bash
+cargo test
+```
+
+### Test Suite Overview
+
+* **Connection Tests** (`tests/connection.rs`):
+  * Verifies successful TCP connection and handshake.
+  * Ensures the server correctly handles multiple players (up to the limit).
+  * Tests rejection of excess players beyond the game capacity.
+* **Gameplay Tests** (`tests/gameplay.rs`):
+  * Simulates a full game cycle: connection, turn assignment, move submission, and state broadcasting.
+  * Verifies that moves are validated and correctly propagated to all clients.
+* **Reconnection Tests** (`tests/reconnection.rs`):
+  * Tests the robustness of the session management.
+  * Verifies that a player can disconnect and reconnect with their session ID to resume the game without losing state.
 
 ## Usage
 
@@ -109,6 +141,6 @@ sternhalma-server [OPTIONS] --socket <PATH>
 
 ### Arguments
 
-* `-s, --socket <PATH>`: Filesystem path to bind the Unix Socket.
+* `-s, --socket <ADDRESS>`: IP:Port address to bind the TCP listener (e.g., `127.0.0.1:8080`).
 * `-n, --max-turns <N>`: (Optional) Limit the game to N turns.
 * `-t, --timeout <SECONDS>`: (Optional) Connection timeout in seconds (default: 30).
