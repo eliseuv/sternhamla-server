@@ -6,3 +6,6 @@ pub mod sternhalma;
 
 /// Human readable representation of data sizes
 pub mod bytes_sizes;
+
+/// Communication protocol
+pub mod protocol;

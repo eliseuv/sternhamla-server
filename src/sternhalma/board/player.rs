@@ -5,7 +5,7 @@ use serde::Serialize;
 pub const PLAYER_COUNT: usize = 2;
 
 /// Sternhalma players
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(usize)]
 pub enum Player {
