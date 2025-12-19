@@ -108,20 +108,17 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
         }
 
         // Piece (The "Marble")
+        const hasPiece = player === 'Player1' || player === 'Player2';
         let marbleFill = null;
-        let marbleStroke = 'none';
+        let marbleOpacity = 1;
 
-        if (player === 'Player1') {
-            marbleFill = '#8b5cf6'; // Violet
-        } else if (player === 'Player2') {
-            marbleFill = '#f59e0b'; // Amber
+        if (hasPiece) {
+            marbleFill = player === 'Player1' ? '#8b5cf6' : '#f59e0b';
         } else if (isTarget) {
-            // Ghost marble for target?
-            marbleFill = 'rgba(16, 185, 129, 0.3)';
+            marbleFill = '#10b981';
+            marbleOpacity = 0.3;
         }
 
-        // Shadow for marble
-        const hasMarble = player === 'Player1' || player === 'Player2';
 
         // Last Move Highlight
         // If this hex was the FROM or TO of the last move
@@ -133,7 +130,6 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
                 highlightCircle = <circle cx={x} cy={y} r={HEX_SIZE * 0.85} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4,2" opacity="0.7" />;
             }
         }
-
 
         // Points for Hexagon
         const points = [];
@@ -154,12 +150,14 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
                 {/* Marble */}
                 {marbleFill && (
                     <>
-                        {hasMarble && <circle cx={x} cy={y + 2} r={r} fill="rgba(0,0,0,0.5)" />}
-                        <circle cx={x} cy={y} r={r} fill={marbleFill} stroke={marbleStroke} strokeWidth="1" />
+                        {hasPiece && <circle cx={x} cy={y + 2} r={r} fill="rgba(0,0,0,0.5)" pointerEvents="none" />}
+                        <circle cx={x} cy={y} r={r} fill={marbleFill} fillOpacity={marbleOpacity} stroke="none" pointerEvents="none" />
                         {/* Shine */}
-                        {hasMarble && <circle cx={x - r * 0.3} cy={y - r * 0.3} r={r * 0.25} fill="rgba(255,255,255,0.2)" />}
+                        {hasPiece && <circle cx={x - r * 0.3} cy={y - r * 0.3} r={r * 0.25} fill="rgba(255,255,255,0.2)" pointerEvents="none" />}
                     </>
                 )}
+
+                {highlightCircle}
 
                 {highlightCircle}
 
