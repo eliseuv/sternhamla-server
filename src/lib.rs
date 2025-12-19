@@ -4,8 +4,8 @@
 /// Sternhalm game
 pub mod sternhalma;
 
-/// Human readable representation of data sizes
-pub mod bytes_sizes;
+/// Utilities
+pub mod utils;
 
 /// Communication protocol
 pub mod protocol;
