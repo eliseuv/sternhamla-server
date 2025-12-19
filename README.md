@@ -33,6 +33,20 @@ number of single pieces from any player.
 
 The goal of the game is to move all one's pieces to the opposite side of the board.
 
+The goal of the game is to move all one's pieces to the opposite side of the board.
+
+## Web Client
+
+A React-based web client is available in the `web-client` directory. It uses the WebSocket protocol to communicate with the server.
+
+To run the web client:
+
+```bash
+cd web-client
+npm install
+npm run dev
+```
+
 ## Architecture
 
 The server is built using **Rust** and **Tokio**, leveraging an asynchronous, actor-like architecture to ensure high performance and scalability. This design decouples connection handling/IO from the core game logic.
@@ -79,14 +93,25 @@ graph TD
 
 ## Communication Protocol
 
-The server communicates via **TCP**, allowing clients to connect over the network.
-Messages are serialized using [ciborium](https://github.com/enarx/ciborium) (CBOR) and are framed with a length prefix.
+The server supports two concurrent transport modes:
+
+1. **Raw TCP**: Legacy binary protocol.
+2. **WebSocket**: Modern web-compatible protocol (defaulting to port 8081).
+
+Both transports use the same message format serialized with [ciborium](https://github.com/enarx/ciborium) (CBOR).
 
 ### Connection & Framing
 
-1. **Transport**: TCP
-2. **Framing**: Every message is prefixed with a **4-byte big-endian unsigned integer** representing the length of the CBOR-encoded payload in bytes.
-    * `[Length (u32 BE)] [CBOR Payload]`
+#### Raw TCP
+
+* **Transport**: TCP Socket
+* **Framing**: Length-prefixed. Every message is prefixed with a **4-byte big-endian unsigned integer** representing the length of the CBOR-encoded payload.
+  * `[Length (u32 BE)] [CBOR Payload]`
+
+#### WebSocket
+
+* **Transport**: HTTP/1.1 Upgrade to WebSocket
+* **Framing**: Standard WebSocket binary frames containing the CBOR payload (no length prefix needed).
 
 ### Messages
 
@@ -141,6 +166,7 @@ sternhalma-server [OPTIONS] --socket <PATH>
 
 ### Arguments
 
-* `-s, --socket <ADDRESS>`: IP:Port address to bind the TCP listener (e.g., `127.0.0.1:8080`).
+* `-s, --socket <ADDRESS>`: IP:Port address to bind the **Raw TCP** listener (default: `127.0.0.1:8080`).
+* `--ws-port <PORT>`: Port to bind the **WebSocket** listener (default: `8081`).
 * `-n, --max-turns <N>`: (Optional) Limit the game to N turns.
 * `-t, --timeout <SECONDS>`: (Optional) Connection timeout in seconds (default: 30).
