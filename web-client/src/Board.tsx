@@ -103,8 +103,11 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
             hexFill = '#064e3b';   // Dark Green background
             hexStrokeWidth = 2;
         } else if (isStartCandidate) {
-            hexStroke = '#6366f1'; // Candidate Indigo
-            hexStrokeWidth = 1.5;
+            // Use player color for start candidates
+            if (player === 'player1') hexStroke = '#8b5cf6';
+            else if (player === 'player2') hexStroke = '#f59e0b';
+            else hexStroke = '#6366f1'; // Fallback
+            hexStrokeWidth = 2; // Make it a bit thicker to be visible
         }
 
         // Piece (The "Marble")
@@ -120,23 +123,24 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
         }
 
 
-        // Last Move Highlight
-        // If this hex was the FROM or TO of the last move
-        let highlightCircle = null;
-        if (lastMove) {
-            const isFrom = lastMove[0][0] === i && lastMove[0][1] === j;
-            const isTo = lastMove[1][0] === i && lastMove[1][1] === j;
-            if (isFrom || isTo) {
-                highlightCircle = <circle cx={x} cy={y} r={HEX_SIZE * 0.85} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4,2" opacity="0.7" />;
-            }
-        }
-
         // Points for Hexagon
         const points = [];
         for (let k = 0; k < 6; k++) {
             const angle_deg = 60 * k - 30;
             const angle_rad = Math.PI / 180 * angle_deg;
             points.push(`${x + HEX_SIZE * Math.cos(angle_rad)},${y + HEX_SIZE * Math.sin(angle_rad)}`);
+        }
+
+        // Last Move Highlight
+        // If this hex was the FROM or TO of the last move
+        let highlightHex = null;
+        if (lastMove) {
+            const isFrom = lastMove[0][0] === i && lastMove[0][1] === j;
+            const isTo = lastMove[1][0] === i && lastMove[1][1] === j;
+            if (isFrom || isTo) {
+                // Subtle brighter tone: white overlay with low opacity
+                highlightHex = <polygon points={points.join(' ')} fill="white" fillOpacity="0.15" pointerEvents="none" />;
+            }
         }
 
         // Marble Radius
@@ -147,6 +151,9 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
                 {/* Hexagon Background (Hole) */}
                 <polygon points={points.join(' ')} fill={hexFill} stroke={hexStroke} strokeWidth={hexStrokeWidth} />
 
+                {/* Last Move Highlight (Rendered on top of background, below marble) */}
+                {highlightHex}
+
                 {/* Marble */}
                 {marbleFill && (
                     <>
@@ -156,10 +163,6 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
                         {hasPiece && <circle cx={x - r * 0.3} cy={y - r * 0.3} r={r * 0.25} fill="rgba(255,255,255,0.2)" pointerEvents="none" />}
                     </>
                 )}
-
-                {highlightCircle}
-
-                {highlightCircle}
 
                 {/* Debug Text */}
                 {/* <text x={x} y={y} textAnchor="middle" dy=".3em" fontSize="6" fill="#777">{i},{j}</text> */}
