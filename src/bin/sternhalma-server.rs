@@ -8,15 +8,24 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use itertools::Itertools;
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     sync::{broadcast, mpsc, oneshot},
 };
 use uuid::Uuid;
 
-use futures::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
+use axum::{
+    Router,
+    // ADDED
+    extract::{
+        State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
+    response::IntoResponse,
+    routing::get,
 };
+use bytes::Bytes;
+use futures::{Sink, SinkExt, Stream, StreamExt};
+use std::pin::Pin;
 use sternhalma_server::{
     protocol::{GameResult, RemoteInMessage, RemoteOutMessage, Scores, ServerCodec},
     sternhalma::{
@@ -25,7 +34,7 @@ use sternhalma_server::{
         timing::GameTimer,
     },
 };
-use tokio_util::codec::Framed;
+use tokio_util::codec::Framed; // ADDED
 
 /// Capacity communication channels between local threads
 const LOCAL_CHANNEL_CAPACITY: usize = 32;
@@ -53,6 +62,9 @@ enum ServerBroadcast {
     /// Game has finished
     GameFinished { result: GameResult },
 }
+
+// Ensure variants are clonable if needed, or broadcast handles it.
+// ServerBroadcast is Clone.
 
 /// Local Client Thread -> Server Thread
 #[derive(Debug)]
@@ -137,6 +149,18 @@ impl Server {
                     // Check if session exists
                     let player = self.sessions.get(&uuid).copied();
                     let _ = resp_tx.send(player);
+                }
+                MainThreadMessage::RequestFreePlayer(resp_tx) => {
+                    // Find a player not in sessions/clients
+                    // We check which players are connected.
+                    // Connected = in self.clients_tx
+                    // We assume max 2 players.
+                    // This logic assumes we want to fill P1 then P2.
+                    // Or any available.
+                    let free_player = [Player::Player1, Player::Player2]
+                        .into_iter()
+                        .find(|p| !self.clients_tx.contains_key(p));
+                    let _ = resp_tx.send(free_player);
                 }
             }
         }
@@ -249,6 +273,12 @@ impl Server {
                              let player = self.sessions.get(&uuid).copied();
                              let _ = resp_tx.send(player);
                          }
+                         Some(MainThreadMessage::RequestFreePlayer(resp_tx)) => {
+                             let free_player = [Player::Player1, Player::Player2]
+                                .into_iter()
+                                .find(|p| !self.clients_tx.contains_key(p));
+                            let _ = resp_tx.send(free_player);
+                        }
                     }
                 }
 
@@ -458,13 +488,18 @@ impl Server {
     }
 }
 
-#[derive(Debug)]
+// Transport abstraction
+type ClientSink = Pin<Box<dyn Sink<RemoteOutMessage, Error = anyhow::Error> + Send + Unpin>>;
+type ClientStream =
+    Pin<Box<dyn Stream<Item = Result<RemoteInMessage, anyhow::Error>> + Send + Unpin>>;
+
 struct Client {
     /// Player assigned to client
     player: Player,
-    /// TCP stream for communication with the remote client
-    sink: SplitSink<Framed<TcpStream, ServerCodec>, RemoteOutMessage>,
-    stream: SplitStream<Framed<TcpStream, ServerCodec>>,
+    /// Sink for messages to remote client
+    sink: ClientSink,
+    /// Stream of messages from remote client
+    stream: ClientStream,
     /// Receiver for direct message from the server
     server_rx: mpsc::Receiver<ServerMessage>,
     /// Receiver for messages broadcast by the server
@@ -476,8 +511,8 @@ struct Client {
 impl Client {
     fn new(
         player: Player,
-        sink: SplitSink<Framed<TcpStream, ServerCodec>, RemoteOutMessage>,
-        stream: SplitStream<Framed<TcpStream, ServerCodec>>,
+        sink: ClientSink,
+        stream: ClientStream,
         server_rx: mpsc::Receiver<ServerMessage>,
         broadcast_rx: broadcast::Receiver<ServerBroadcast>,
         client_tx: mpsc::Sender<ClientMessage>,
@@ -663,6 +698,9 @@ struct Args {
     /// Host IP address
     #[arg(short, long, value_name = "ADDRESS", default_value = "127.0.0.1:8080")]
     socket: String,
+    /// WebSocket port
+    #[arg(long, value_name = "PORT", default_value_t = 8081)]
+    ws_port: u16,
     /// Maximum number of turns
     #[arg(short = 'n', long, value_name = "N")]
     max_turns: usize,
@@ -670,25 +708,7 @@ struct Args {
     timeout: u64,
 }
 
-/// Error type for too many players
-/// Can later be expanded to an enum of all different errors related to player connection
-#[derive(Debug)]
-struct TooManyPlayers;
-
-impl Display for TooManyPlayers {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Too many players connected")
-    }
-}
-
-/// Assign player to a new client
-const fn assign_player(client_id: usize) -> Result<Player, TooManyPlayers> {
-    match client_id {
-        0 => Ok(Player::Player1),
-        1 => Ok(Player::Player2),
-        _ => Err(TooManyPlayers),
-    }
-}
+// Deleted assign_player
 
 /// Main thread message to server thread
 #[derive(Debug)]
@@ -696,7 +716,209 @@ enum MainThreadMessage {
     ClientConnected(Player, Uuid, mpsc::Sender<ServerMessage>),
     ClientReconnected(Player, mpsc::Sender<ServerMessage>),
     ClientReconnectedHandle(Uuid, oneshot::Sender<Option<Player>>),
+    RequestFreePlayer(oneshot::Sender<Option<Player>>),
 }
+
+#[derive(Clone)]
+struct AppState {
+    main_tx: mpsc::Sender<MainThreadMessage>,
+    client_msg_tx: mpsc::Sender<ClientMessage>,
+    server_broadcast_tx: broadcast::Sender<ServerBroadcast>,
+}
+
+async fn handle_handshake(mut stream: ClientStream, mut sink: ClientSink, app_state: AppState) {
+    let AppState {
+        main_tx,
+        client_msg_tx,
+        server_broadcast_tx,
+    } = app_state;
+
+    // 1. Wait for Hello or Reconnect
+    let handshake = match stream.next().await {
+        Some(Ok(msg)) => msg,
+        Some(Err(e)) => {
+            log::error!("Failed to read handshake: {e}");
+            return;
+        }
+        None => {
+            log::error!("Connection closed during handshake");
+            return;
+        }
+    };
+
+    match handshake {
+        RemoteInMessage::Hello => {
+            // New Session - Ask Server for free player
+            let (resp_tx, resp_rx) = oneshot::channel();
+            if let Err(e) = main_tx
+                .send(MainThreadMessage::RequestFreePlayer(resp_tx))
+                .await
+            {
+                log::error!("Failed to contact server: {e}");
+                return;
+            }
+
+            match resp_rx.await {
+                Ok(Some(player)) => {
+                    let session_id = Uuid::new_v4();
+                    log::info!("New client assigned: {player} (Session: {session_id})");
+
+                    // Send Welcome
+                    if let Err(e) = sink
+                        .send(RemoteOutMessage::Welcome { session_id, player })
+                        .await
+                    {
+                        log::error!("Failed to send Welcome: {e}");
+                        return;
+                    }
+
+                    // Server thread -> Client thread
+                    let (server_tx, server_rx) =
+                        mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
+
+                    // Create client
+                    match Client::new(
+                        player,
+                        sink,
+                        stream,
+                        server_rx,
+                        server_broadcast_tx.subscribe(),
+                        client_msg_tx,
+                    ) {
+                        Err(e) => log::error!("Failed to create client: {e:?}"),
+                        Ok(mut client) => {
+                            tokio::spawn(async move {
+                                if let Err(e) = client.run().await {
+                                    log::error!("Client task error: {e:?}");
+                                }
+                            });
+                            if let Err(e) = main_tx
+                                .send(MainThreadMessage::ClientConnected(
+                                    player, session_id, server_tx,
+                                ))
+                                .await
+                            {
+                                log::error!("Failed to notify server of connection: {e:?}");
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::warn!("No free players");
+                    let _ = sink
+                        .send(RemoteOutMessage::Reject {
+                            reason: "Server full".to_string(),
+                        })
+                        .await;
+                }
+                Err(e) => log::error!("Server channel error: {e}"),
+            }
+        }
+        RemoteInMessage::Reconnect { session_id: uuid } => {
+            log::info!("Reconnection attempt: {uuid}");
+            let (resp_tx, resp_rx) = oneshot::channel();
+            if let Err(e) = main_tx
+                .send(MainThreadMessage::ClientReconnectedHandle(uuid, resp_tx))
+                .await
+            {
+                log::error!("Failed to contact server: {e}");
+                return;
+            }
+
+            match resp_rx.await {
+                Ok(Some(player)) => {
+                    // Ack
+                    if let Err(e) = sink
+                        .send(RemoteOutMessage::Welcome {
+                            session_id: uuid,
+                            player,
+                        })
+                        .await
+                    {
+                        log::error!("Failed to send Welcome: {e}");
+                        return;
+                    }
+
+                    let (server_tx, server_rx) =
+                        mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
+                    match Client::new(
+                        player,
+                        sink,
+                        stream,
+                        server_rx,
+                        server_broadcast_tx.subscribe(),
+                        client_msg_tx,
+                    ) {
+                        Err(e) => log::error!("Failed to create client: {e:?}"),
+                        Ok(mut client) => {
+                            tokio::spawn(async move {
+                                if let Err(e) = client.run().await {
+                                    log::error!("Client task error: {e:?}");
+                                }
+                            });
+                            let _ = main_tx
+                                .send(MainThreadMessage::ClientReconnected(player, server_tx))
+                                .await;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::warn!("Unknown session: {uuid}");
+                    let _ = sink
+                        .send(RemoteOutMessage::Reject {
+                            reason: "Unknown Session".to_string(),
+                        })
+                        .await;
+                }
+                Err(e) => log::error!("Server channel error: {e}"),
+            }
+        }
+        _ => {
+            log::error!("Invalid handshake message");
+        }
+    };
+}
+
+async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_ws(socket, state))
+}
+
+async fn handle_ws(socket: WebSocket, state: AppState) {
+    let (ws_write, ws_read) = socket.split();
+
+    // Adapter for Stream -> RemoteInMessage
+    let stream = Box::pin(ws_read.map(|msg_res| match msg_res {
+        Ok(Message::Binary(bin)) => RemoteInMessage::from_bytes(&bin),
+        Ok(Message::Close(_)) => Err(anyhow::anyhow!("Connection closed")),
+        Ok(_) => Err(anyhow::anyhow!("Unexpected message type")),
+        Err(e) => Err(anyhow::anyhow!("WS Error: {e}")),
+    }));
+
+    // Adapter for Sink -> RemoteOutMessage
+    let sink = Box::pin(SinkExt::with(ws_write, |msg: RemoteOutMessage| {
+        let mut buf = Vec::new();
+        // Ciborium to vec
+        let res = ciborium::into_writer(&msg, &mut buf)
+            .map_err(|e| anyhow::anyhow!("Serialization error: {e}"))
+            .map(|_| Message::Binary(Bytes::from(buf)));
+        future::ready(res)
+    }));
+
+    // Reuse handle_handshake logic
+    // We need to pass ClientSink/Stream. The adapters should match.
+    // Wait, SinkExt::with returns a struct, I need to wrap in Box/Pin.
+    // And Sink must satisfy the trait.
+    // ws_write is SplitSink<WebSocket>.
+    // SinkExt::with takes `self`.
+
+    // Boxing helper
+    let sink: ClientSink = Box::pin(sink);
+    let stream: ClientStream = Box::pin(stream);
+
+    handle_handshake(stream, sink, state).await;
+}
+
+use futures::future;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -712,7 +934,7 @@ async fn main() -> Result<()> {
     let (client_msg_tx, client_msg_rx) = mpsc::channel::<ClientMessage>(LOCAL_CHANNEL_CAPACITY);
 
     // Server thread -> Client threads
-    let (server_broadcast_tx, server_broadcast_rx) =
+    let (server_broadcast_tx, _server_broadcast_rx) =
         broadcast::channel::<ServerBroadcast>(LOCAL_CHANNEL_CAPACITY);
 
     // Main thread -> Server thread
@@ -732,16 +954,38 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
+    // App State
+    let app_state = AppState {
+        main_tx: main_tx.clone(),
+        client_msg_tx,
+        server_broadcast_tx,
+    };
+
     // Bind TCP listener to the socket address
     let listener = TcpListener::bind(&args.socket)
         .await
         .with_context(|| "Failed to bind listener to socket")?;
-    log::info!("Lisening at {socket:?}", socket = args.socket);
+    log::info!("Listening (TCP) at {socket:?}", socket = args.socket);
+
+    // Axum server
+    let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .layer(tower_http::cors::CorsLayer::permissive())
+        .with_state(app_state.clone());
+
+    let ws_addr = format!("0.0.0.0:{}", args.ws_port);
+    let ws_listener = tokio::net::TcpListener::bind(&ws_addr).await?;
+    log::info!("Listening (WS) at {ws_addr}");
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(ws_listener, app).await {
+            log::error!("Axum server error: {e}");
+        }
+    });
 
     tokio::select! {
-        // Connections loop
+        // TCP Connections loop
         _ = async {
-            let mut client_id_counter = 0;
             loop {
                 match listener.accept().await {
                     Err(e) => {
@@ -749,166 +993,14 @@ async fn main() -> Result<()> {
                         continue;
                     }
                     Ok((stream, _addr)) => {
-                        let client_id = client_id_counter;
-                        // client_id_counter incremented only on successful assignment
+                        let framed = Framed::new(stream, ServerCodec::new());
+                        let (write, read) = framed.split();
+                        let sink: ClientSink = Box::pin(write.sink_map_err(|e| anyhow::anyhow!(e)));
+                        let stream: ClientStream = Box::pin(read.map(|msg| msg.map_err(|e| anyhow::anyhow!(e))));
 
-                         // Handshake
-                        let mut framed = Framed::new(stream, ServerCodec::new());
-
-                        // 1. Wait for Hello or Reconnect
-                        let handshake = match framed.next().await {
-                            Some(Ok(msg)) => msg,
-                            Some(Err(e)) => {
-                                log::error!("Failed to read handshake: {e}");
-                                continue;
-                            }
-                            None => {
-                                log::error!("Connection closed during handshake");
-                                continue;
-                            }
-                        };
-
-                        let player = match handshake {
-                            RemoteInMessage::Hello => {
-                                // New Session
-                                let session_id = Uuid::new_v4();
-                                log::info!("New session request: {session_id}");
-                                let player = match assign_player(client_id) {
-                                    Err(e) => {
-                                        log::error!("Failed to assign player to new client: {e}");
-                                        // Send reject
-                                        let reject = RemoteOutMessage::Reject { reason: e.to_string() };
-                                        let _ = framed.send(reject).await;
-                                        continue;
-                                    },
-                                    Ok(player) => {
-                                        client_id_counter += 1;
-                                        player
-                                    },
-                                };
-
-                                log::info!("New client assign: {player} (Session: {session_id})");
-
-                                // Send Welcome
-                                let welcome = RemoteOutMessage::Welcome { session_id, player };
-                                if let Err(e) = framed.send(welcome).await {
-                                     log::error!("Failed to send Welcome: {e}");
-                                     continue;
-                                }
-
-                                // Server thread -> Client thread
-                                let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
-
-                                // Spawn client thread
-                                let (write, read) = framed.split();
-                                match Client::new(player, write, read, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
-                                    Err(e) => {
-                                        log::error!("Failed to create client: {e:?}");
-                                        continue;
-                                    }
-                                    Ok(mut client) => {
-                                        tokio::spawn(async move {
-                                            if let Err(e) = client.run().await {
-                                                log::error!("Client task error: {e:?}");
-                                            }
-                                        });
-
-                                        // Send client communication channel to server
-                                        if let Err(e) = main_tx.send(MainThreadMessage::ClientConnected(player, session_id, server_tx)).await {
-                                            log::error!("Failed to send client communitcation channel to server: {e:?}");
-                                            // task.abort(); // No task handle here, client.run() is already spawned
-                                            continue;
-                                        }
-
-                                    }
-                                };
-                                player
-                            }
-                            RemoteInMessage::Reconnect { session_id: uuid } => {
-                                 // TODO: Check if session is valid? Wait, only server knows.
-                                 // We don't have access to server state here easily to validate UUID *before* connecting.
-                                 // Logic: We assume it's valid, try to connect, if server accepts, good.
-                                 // But we need the Player associated with UUID to spawn Client.
-                                 // The main thread does NOT know the mapping. Only Server thread does.
-                                 // DESIGN FLAW FIX: We need to ask Server to adopt this stream.
-                                 // Or have the Server manage connections?
-                                 // Current arc: Main -> ClientThread. Server -> ClientThread.
-
-                                 // FIX: The server must handle the reconnection logic deeper or we need shared state.
-                                 // Let's go with shared state for simplicity in this refactor.
-                                 // Main thread maintains a minimal Session Map? No, that duplicates state.
-
-                                 // Correct approach for this architecture:
-                                 // Connection comes in. We handshake.
-                                 // If Reconnect:
-                                 // We can't know which Player it is.
-                                 // We can't spawn Client(Player).
-
-                                 // Let's modify the architecture slightly:
-                                 // Main thread keeps the Session Map?
-                                 // OR
-                                 // We ask the server "Who is session X?" via a channel?
-                                 // That requires a return channel (oneshot).
-
-                                 log::info!("Reconnection attempt with session {uuid}");
-
-                                 // Ask server for player info
-                                 let (resp_tx, resp_rx) = oneshot::channel();
-                                 if let Err(_) = main_tx.send(MainThreadMessage::ClientReconnectedHandle(uuid, resp_tx)).await {
-                                     log::error!("Server closed main channel");
-                                     continue;
-                                 }
-
-                                 let player = match resp_rx.await {
-                                     Ok(Some(p)) => p,
-                                     Ok(None) => {
-                                         log::warn!("Unknown session {uuid}");
-                                         // Send reject
-                                        let reject = RemoteOutMessage::Reject { reason: "Unknown Session".to_string() };
-                                        let _ = framed.send(reject).await;
-                                         continue;
-                                     },                                     Err(_) => {
-                                         log::error!("Server did not reply to session query");
-                                         continue;
-                                     }
-                                 };
-
-                                // Send Welcome (Ack)
-                                let welcome = RemoteOutMessage::Welcome { session_id: uuid, player };
-                                if let Err(e) = framed.send(welcome).await {
-                                     log::error!("Failed to send Welcome: {e}");
-                                     continue;
-                                }
-
-                                // Spawn client handler
-                                log::debug!("Creating client {player}");
-                                let (write, read) = framed.split();
-                                let (server_tx, server_rx) = mpsc::channel::<ServerMessage>(LOCAL_CHANNEL_CAPACITY);
-
-                                 match Client::new(player, write, read, server_rx, server_broadcast_rx.resubscribe(), client_msg_tx.clone()) {
-                                    Err(e) => {
-                                        log::error!("Failed to create client: {e:?}");
-                                        continue;
-                                    }
-                                    Ok(mut client) => {
-                                        tokio::spawn(async move {
-                                            if let Err(e) = client.run().await {
-                                                log::error!("Client task error: {e:?}");
-                                            }
-                                        });
-                                        let _ = main_tx.send(MainThreadMessage::ClientReconnected(player, server_tx)).await;
-                                        player
-                                    }
-                                 }
-                            }
-                            _ => {
-                                log::error!("Unexpected message during handshake");
-                                continue;
-                            }
-                        };
-
+                        tokio::spawn(handle_handshake(stream, sink, app_state.clone()));
+                    }
                 }
-            }
             }
         } => {},
 

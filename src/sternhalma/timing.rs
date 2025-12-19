@@ -30,7 +30,7 @@ impl<const N_TURNS: usize> Default for GameTimer<N_TURNS> {
 impl<const N_TURNS: usize> GameTimer<N_TURNS> {
     #[inline(always)]
     pub fn update(&mut self, game: &super::Game) {
-        if game.status.turns() % N_TURNS == 0 {
+        if game.status.turns().is_multiple_of(N_TURNS) {
             self.turns_rate = N_TURNS as f64 / self.timer.elapsed().as_secs_f64();
             self.timer = Instant::now();
         }
@@ -41,7 +41,7 @@ impl<const N_TURNS: usize> GameTimer<N_TURNS> {
     where
         F: Fn(&Self),
     {
-        if game.status.turns() % N_TURNS == 0 {
+        if game.status.turns().is_multiple_of(N_TURNS) {
             self.turns_rate = N_TURNS as f64 / self.timer.elapsed().as_secs_f64();
 
             func(&*self);

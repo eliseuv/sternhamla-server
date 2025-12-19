@@ -21,7 +21,7 @@ impl TestServer {
         // Build the server binary once ensuring it's up to date
         BUILD_SERVER.call_once(|| {
             let status = Command::new("cargo")
-                .args(&["build", "--bin", "sternhalma-server"])
+                .args(["build", "--bin", "sternhalma-server"])
                 .status()
                 .expect("Failed to build server");
             assert!(status.success(), "Server build failed");
@@ -62,7 +62,7 @@ impl TestServer {
         let mut started = false;
 
         while attempts < max_attempts {
-            if let Ok(_) = std::net::TcpStream::connect(&address) {
+            if std::net::TcpStream::connect(&address).is_ok() {
                 started = true;
                 break;
             }
@@ -128,7 +128,7 @@ impl TestClient {
     pub async fn recv(&mut self) -> Result<RemoteOutMessage> {
         match self.framed.next().await {
             Some(Ok(msg)) => Ok(msg),
-            Some(Err(e)) => Err(e.into()),
+            Some(Err(e)) => Err(e),
             None => Err(anyhow!("Connection closed")),
         }
     }

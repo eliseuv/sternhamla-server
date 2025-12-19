@@ -35,6 +35,9 @@ rand = "0.9"
 rand_xoshiro = "0.7"
 rand_distr = "0.5"
 futures = "0.3.31"
+axum = { version = "0.8.7", features = ["ws"] }
+tower-http = { version = "0.6.8", features = ["cors", "fs"] }
+tokio-stream = "0.1.17"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
