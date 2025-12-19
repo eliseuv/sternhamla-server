@@ -16,6 +16,7 @@ use crate::sternhalma::{
 
 pub mod client;
 pub mod messages;
+pub mod protocol;
 
 use messages::{ClientMessage, ClientRequest, ServerBroadcast, ServerMessage};
 

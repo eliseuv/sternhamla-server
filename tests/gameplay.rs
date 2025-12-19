@@ -1,5 +1,5 @@
 use common::TestServer;
-use sternhalma_server::protocol::{RemoteInMessage, RemoteOutMessage};
+use sternhalma_server::server::protocol::{RemoteInMessage, RemoteOutMessage};
 use sternhalma_server::sternhalma::board::player::Player;
 
 mod common;

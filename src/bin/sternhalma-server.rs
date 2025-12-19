@@ -19,14 +19,11 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use sternhalma_server::{
+use sternhalma_server::server::{
+    MainThreadMessage, Server,
+    client::{Client, ClientSink, ClientStream},
+    messages::{ClientMessage, ServerBroadcast, ServerMessage},
     protocol::{RemoteInMessage, RemoteOutMessage, ServerCodec},
-    server::{
-        MainThreadMessage, Server,
-        client::{Client, ClientSink, ClientStream},
-        messages::{ClientMessage, ServerBroadcast, ServerMessage},
-    },
-    sternhalma::{GameResult, board::player::Player},
 };
 use tokio_util::codec::Framed;
 

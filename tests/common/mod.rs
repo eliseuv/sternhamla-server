@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use sternhalma_server::protocol::{ClientCodec, RemoteInMessage, RemoteOutMessage};
+use sternhalma_server::server::protocol::{ClientCodec, RemoteInMessage, RemoteOutMessage};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 

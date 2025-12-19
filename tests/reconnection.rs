@@ -1,6 +1,6 @@
 use common::TestServer;
 use std::mem::drop;
-use sternhalma_server::protocol::{RemoteInMessage, RemoteOutMessage};
+use sternhalma_server::server::protocol::{RemoteInMessage, RemoteOutMessage};
 use sternhalma_server::sternhalma::board::player::Player;
 
 mod common;

@@ -5,7 +5,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::{
-    protocol::{RemoteInMessage, RemoteOutMessage},
+    server::protocol::{RemoteInMessage, RemoteOutMessage},
     sternhalma::board::player::Player,
 };
 
