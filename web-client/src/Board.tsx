@@ -108,12 +108,12 @@ export const Board: React.FC<BoardProps> = ({ boardState, availableMoves, onMove
         }
 
         // Piece (The "Marble")
-        const hasPiece = player === 'Player1' || player === 'Player2';
+        const hasPiece = player === 'player1' || player === 'player2';
         let marbleFill = null;
         let marbleOpacity = 1;
 
         if (hasPiece) {
-            marbleFill = player === 'Player1' ? '#8b5cf6' : '#f59e0b';
+            marbleFill = player === 'player1' ? '#8b5cf6' : '#f59e0b';
         } else if (isTarget) {
             marbleFill = '#10b981';
             marbleOpacity = 0.3;

@@ -114,8 +114,8 @@ export function Game({ url, onLeave }: GameProps) {
     // Initial board setup
     useEffect(() => {
         const initialMap = new Map<string, Player>();
-        PLAYER1_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'Player1'));
-        PLAYER2_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'Player2'));
+        PLAYER1_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'player1'));
+        PLAYER2_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'player2'));
         setBoardState(initialMap);
     }, []);
 
@@ -151,7 +151,7 @@ export function Game({ url, onLeave }: GameProps) {
             <div style={{ marginBottom: 10, width: '100%', display: 'flex', justifyContent: 'space-between', padding: '0 20px', boxSizing: 'border-box' }}>
                 <span>Status: <strong style={{ color: connectionError ? '#ef4444' : '#10b981' }}>{connectionStatus}</strong> {connectionError && <span style={{ color: '#ef4444' }}>({connectionError})</span>}</span>
                 {myPlayer && (
-                    <span>You are: <strong style={{ color: myPlayer === 'Player1' ? '#8b5cf6' : '#f59e0b' }}>{myPlayer}</strong></span>
+                    <span>You are: <strong style={{ color: myPlayer === 'player1' ? '#8b5cf6' : '#f59e0b' }}>{myPlayer}</strong></span>
                 )}
             </div>
 

@@ -1,4 +1,4 @@
-export type Player = 'Player1' | 'Player2';
+export type Player = 'player1' | 'player2';
 
 export type HexIdx = [number, number];
 
