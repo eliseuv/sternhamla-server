@@ -32,16 +32,17 @@ const LOCAL_CHANNEL_CAPACITY: usize = 32;
 /// Command line arguments
 #[derive(Debug, Parser)]
 #[command(name = "sternhalma-server", version, about)]
+#[command(group(clap::ArgGroup::new("listener").required(true).args(["tcp", "ws"])))]
 struct Args {
-    /// Host IP address
-    #[arg(short, long, value_name = "ADDRESS", default_value = "127.0.0.1:8080")]
-    socket: String,
-    /// WebSocket port
-    #[arg(long, value_name = "PORT", default_value_t = 8081)]
-    ws_port: u16,
+    /// Host IP address for Raw TCP
+    #[arg(long, value_name = "ADDRESS")]
+    tcp: Option<String>,
+    /// Host IP address for WebSocket
+    #[arg(long, value_name = "ADDRESS")]
+    ws: Option<String>,
     /// Maximum number of turns
     #[arg(short = 'n', long, value_name = "N")]
-    max_turns: usize,
+    max_turns: Option<usize>,
     #[arg(short, long, value_name = "SECONDS", default_value_t = 300)]
     timeout: u64,
 }
@@ -299,8 +300,11 @@ async fn main() -> Result<()> {
     // The `Server` struct runs in its own task and manages the game logic.
     let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx.clone())
         .with_context(|| "Failed to create server")?;
+
+    let max_turns = args.max_turns.unwrap_or(usize::MAX);
+
     tokio::spawn(async move {
-        if let Err(e) = server.try_run(timeout, args.max_turns).await {
+        if let Err(e) = server.try_run(timeout, max_turns).await {
             log::error!("Server encountered an error: {e:?}");
         }
         log::trace!("Sending shutdown signal");
@@ -314,54 +318,61 @@ async fn main() -> Result<()> {
         server_broadcast_tx,
     };
 
-    // --- Start Listeners ---
+    // --- Start Listener ---
 
-    // 1. TCP Listener (Raw protocol)
-    let listener = TcpListener::bind(&args.socket)
-        .await
-        .with_context(|| "Failed to bind listener to socket")?;
-    log::info!("Listening (TCP) at {socket:?}", socket = args.socket);
+    if let Some(addr) = args.tcp {
+        // 1. TCP Listener (Raw protocol)
+        let listener = TcpListener::bind(&addr)
+            .await
+            .with_context(|| "Failed to bind listener to socket")?;
+        log::info!("Listening (TCP) at {addr}");
 
-    // 2. WebSocket Listener (Web Clients)
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .layer(tower_http::cors::CorsLayer::permissive())
-        .with_state(app_state.clone());
+        tokio::select! {
+             // TCP Connections loop
+            _ = async {
+                loop {
+                    match listener.accept().await {
+                        Err(e) => {
+                            log::error!("Failed to accept connection: {e:?}");
+                            continue;
+                        }
+                        Ok((stream, _addr)) => {
+                            let framed = Framed::new(stream, ServerCodec::new());
+                            let (write, read) = framed.split();
+                            let sink: ClientSink = Box::pin(write.sink_map_err(|e| anyhow::anyhow!(e)));
+                            let stream: ClientStream = Box::pin(read.map(|msg| msg.map_err(|e| anyhow::anyhow!(e))));
 
-    let ws_addr = format!("0.0.0.0:{}", args.ws_port);
-    let ws_listener = tokio::net::TcpListener::bind(&ws_addr).await?;
-    log::info!("Listening (WS) at {ws_addr}");
-
-    tokio::spawn(async move {
-        if let Err(e) = axum::serve(ws_listener, app).await {
-            log::error!("Axum server error: {e}");
-        }
-    });
-
-    tokio::select! {
-        // TCP Connections loop
-        _ = async {
-            loop {
-                match listener.accept().await {
-                    Err(e) => {
-                        log::error!("Failed to accept connection: {e:?}");
-                        continue;
-                    }
-                    Ok((stream, _addr)) => {
-                        let framed = Framed::new(stream, ServerCodec::new());
-                        let (write, read) = framed.split();
-                        let sink: ClientSink = Box::pin(write.sink_map_err(|e| anyhow::anyhow!(e)));
-                        let stream: ClientStream = Box::pin(read.map(|msg| msg.map_err(|e| anyhow::anyhow!(e))));
-
-                        tokio::spawn(handle_handshake(stream, sink, app_state.clone()));
+                            tokio::spawn(handle_handshake(stream, sink, app_state.clone()));
+                        }
                     }
                 }
-            }
-        } => {},
+            } => {},
 
-        // Shutdown signal
-        _ = shutdown_rx => {
-            log::trace!("Shutdown singnal received");
+            // Shutdown signal
+             _ = shutdown_rx => {
+                log::trace!("Shutdown signal received");
+            }
+        }
+    } else if let Some(addr) = args.ws {
+        // 2. WebSocket Listener (Web Clients)
+        let app = Router::new()
+            .route("/ws", get(ws_handler))
+            .layer(tower_http::cors::CorsLayer::permissive())
+            .with_state(app_state.clone());
+
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        log::info!("Listening (WS) at {addr}");
+
+        // Using axum's graceful shutdown
+        // We need to map the shutdown_rx (oneshot) to a future that completes when the signal is received
+        // Note: shutdown_rx consumes the channel.
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                shutdown_rx.await.ok();
+            })
+            .await
+        {
+            log::error!("Axum server error: {e}");
         }
     }
 

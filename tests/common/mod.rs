@@ -39,7 +39,7 @@ impl TestServer {
         // Spawn server
         let path = env!("CARGO_BIN_EXE_sternhalma-server");
         let mut process = Command::new(path)
-            .arg("--socket")
+            .arg("--tcp")
             .arg(&address)
             .arg("--max-turns")
             .arg("100")

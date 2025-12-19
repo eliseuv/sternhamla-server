@@ -100,6 +100,8 @@ The server supports two concurrent transport modes:
 
 Both transports use the same message format serialized with [ciborium](https://github.com/enarx/ciborium) (CBOR).
 
+For a detailed specification of the protocol, framing, and message schemas, please refer to [protocol.md](docs/protocol.md).
+
 ### Connection & Framing
 
 #### Raw TCP
@@ -161,12 +163,12 @@ cargo test
 The server executable is `sternhalma-server`.
 
 ```bash
-sternhalma-server [OPTIONS] --socket <PATH>
+sternhalma-server --max-turns <N> <--tcp <ADDRESS>|--ws <ADDRESS>>
 ```
 
 ### Arguments
 
-* `-s, --socket <ADDRESS>`: IP:Port address to bind the **Raw TCP** listener (default: `127.0.0.1:8080`).
-* `--ws-port <PORT>`: Port to bind the **WebSocket** listener (default: `8081`).
+* `--tcp <ADDRESS>`: Bind the **Raw TCP** listener to the specified address (e.g., `127.0.0.1:8080`).
+* `--ws <ADDRESS>`: Bind the **WebSocket** listener to the specified address (e.g., `127.0.0.1:8081`).
 * `-n, --max-turns <N>`: (Optional) Limit the game to N turns.
-* `-t, --timeout <SECONDS>`: (Optional) Connection timeout in seconds (default: 30).
+* `-t, --timeout <SECONDS>`: (Optional) Connection timeout in seconds (default: 300).
