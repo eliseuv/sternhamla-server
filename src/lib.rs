@@ -9,3 +9,6 @@ pub mod bytes_sizes;
 
 /// Communication protocol
 pub mod protocol;
+
+/// Server implementation
+pub mod server;

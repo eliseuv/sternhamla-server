@@ -14,6 +14,24 @@ pub mod board;
 /// Statistics gathered over turns
 pub mod timing;
 
+use serde::{Deserialize, Serialize};
+
+pub type Scores = [usize; PLAYER_COUNT];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum GameResult {
+    Finished {
+        winner: Player,
+        total_turns: usize,
+        scores: Scores,
+    },
+    MaxTurns {
+        total_turns: usize,
+        scores: Scores,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum GameStatus {
     /// Game is ongoing

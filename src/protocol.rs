@@ -1,7 +1,5 @@
-use crate::sternhalma::board::{
-    movement::MovementIndices,
-    player::{PLAYER_COUNT, Player},
-};
+use crate::sternhalma::board::{movement::MovementIndices, player::Player};
+use crate::sternhalma::{GameResult, Scores};
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -10,22 +8,6 @@ use uuid::Uuid;
 
 /// Maximum length of a remote message in bytes
 pub const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
-
-pub type Scores = [usize; PLAYER_COUNT];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-pub enum GameResult {
-    Finished {
-        winner: Player,
-        total_turns: usize,
-        scores: Scores,
-    },
-    MaxTurns {
-        total_turns: usize,
-        scores: Scores,
-    },
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
