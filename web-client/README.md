@@ -11,6 +11,7 @@ A modern, responsive web client for the Sternhalma game server, built with **Rea
   - Shows last move with clear indicators.
   - piece selection and candidates.
 - **Dark Mode**: Sleek, modern dark theme.
+- **Server Selection**: Allows manually specifying the game server URL.
 - **Robust Networking**: Automatic reconnection and state synchronization using `react-use-websocket` and `cbor-x`.
 
 ## Prerequisites
@@ -26,13 +27,8 @@ A modern, responsive web client for the Sternhalma game server, built with **Rea
    npm install
    ```
 
-2. **Configure Port (Optional)**:
-   By default, the client attempts to connect to `ws://127.0.0.1:8081/ws`.
-   To change this, modify the `WS_URL` constant in `src/App.tsx`:
-
-   ```typescript
-   const WS_URL = 'ws://127.0.0.1:YOUR_PORT/ws';
-   ```
+2. **Connect to Server**:
+   When the application starts, you will see a Welcome Screen. Enter your server URL (default: `ws://127.0.0.1:8081/ws`) and click "Join Game".
 
 ## Running the Client
 
@@ -62,7 +58,9 @@ npx serve -s dist
 
 ## Architecture
 
-- **`src/App.tsx`**: Main application component. Manages WebSocket connection, game state `gameResult`, and renders the UI layout.
+- **`src/App.tsx`**: Main container. Manages view switching between Welcome Screen and Game.
+- **`src/WelcomeScreen.tsx`**: Entry screen for inputting the server URL.
+- **`src/Game.tsx`**: Main game logic component. Manages WebSocket connection, game state, and renders the Board.
 - **`src/Board.tsx`**: Renders the game board. Handles:
   - Coordinate conversion (Axial Hex <-> Pixel)
   - SVG rendering of holes, marbles, and highlights
