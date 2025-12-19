@@ -133,13 +133,32 @@ export function Game({ url, onLeave }: GameProps) {
         setTurn(null);
     };
 
-    const connectionStatus = {
+    const formatPlayerName = (name: string) => {
+        if (name === 'player1') return 'Player 1';
+        if (name === 'player2') return 'Player 2';
+        return name.charAt(0).toUpperCase() + name.slice(1);
+    };
+
+    const isGameInProgress = scores[0] > 0 || scores[1] > 0 || lastMove !== undefined;
+
+    const connectionStatusLabel = {
         [ReadyState.CONNECTING]: 'Connecting',
-        [ReadyState.OPEN]: 'Open',
+        [ReadyState.OPEN]: 'Connected',
         [ReadyState.CLOSING]: 'Closing',
         [ReadyState.CLOSED]: 'Closed',
         [ReadyState.UNINSTANTIATED]: 'Uninstantiated',
     }[readyState];
+
+    let gameStatusDisplay = connectionStatusLabel;
+    if (readyState === ReadyState.OPEN) {
+        if (gameResult) {
+            gameStatusDisplay = "Game Over";
+        } else if (isGameInProgress) {
+            gameStatusDisplay = "In Progress";
+        } else {
+            gameStatusDisplay = "Waiting for players";
+        }
+    }
 
     return (
         <div className="card">
@@ -149,22 +168,22 @@ export function Game({ url, onLeave }: GameProps) {
             </div>
 
             <div style={{ marginBottom: 10, width: '100%', display: 'flex', justifyContent: 'space-between', padding: '0 20px', boxSizing: 'border-box' }}>
-                <span>Status: <strong style={{ color: connectionError ? '#ef4444' : '#10b981' }}>{connectionStatus}</strong> {connectionError && <span style={{ color: '#ef4444' }}>({connectionError})</span>}</span>
+                <span>Status: <strong style={{ color: connectionError ? '#ef4444' : '#10b981' }}>{gameStatusDisplay}</strong> {connectionError && <span style={{ color: '#ef4444' }}>({connectionError})</span>}</span>
                 {myPlayer && (
-                    <span>You are: <strong style={{ color: myPlayer === 'player1' ? '#8b5cf6' : '#f59e0b' }}>{myPlayer}</strong></span>
+                    <span>You are: <strong style={{ color: myPlayer === 'player1' ? '#8b5cf6' : '#f59e0b' }}>{formatPlayerName(myPlayer)}</strong></span>
                 )}
             </div>
 
             <div style={{ marginBottom: 10, width: '100%', display: 'flex', justifyContent: 'center', gap: '20px', fontSize: '1.2rem' }}>
-                <span style={{ color: '#8b5cf6' }}>P1: {scores[0]}</span>
+                <span style={{ color: '#8b5cf6' }}>{formatPlayerName('player1')}: {scores[0]}</span>
                 <span style={{ color: '#555' }}>|</span>
-                <span style={{ color: '#f59e0b' }}>P2: {scores[1]}</span>
+                <span style={{ color: '#f59e0b' }}>{formatPlayerName('player2')}: {scores[1]}</span>
             </div>
 
             {turn && <div style={{ color: '#10b981', fontWeight: 'bold', fontSize: '1.1rem' }}>Your Turn!</div>}
             {gameResult && (
                 <div style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '1.5rem' }}>
-                    Game Over! {gameResult.type === 'finished' ? `Winner: ${gameResult.winner}` : 'Max Turns Reached (Draw)'}
+                    Game Over! {gameResult.type === 'finished' ? `Winner: ${formatPlayerName(gameResult.winner)}` : 'Max Turns Reached (Draw)'}
                 </div>
             )}
 
