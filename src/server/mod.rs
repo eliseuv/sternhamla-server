@@ -21,23 +21,34 @@ pub mod protocol;
 use messages::{ClientMessage, ClientRequest, ServerBroadcast, ServerMessage};
 
 /// Main thread message to server thread
+///
+/// Signals sent from the main application thread to the server thread
+/// to handle new connections, reconnections, or player slot requests.
 #[derive(Debug)]
 pub enum MainThreadMessage {
+    /// A new client has successfully completed the handshake
     ClientConnected(Player, Uuid, mpsc::Sender<ServerMessage>),
+    /// A client is trying to reconnect with an existing session
     ClientReconnected(Player, mpsc::Sender<ServerMessage>),
+    /// Request to check if a session ID is valid and get the associated player
     ClientReconnectedHandle(Uuid, oneshot::Sender<Option<Player>>),
+    /// Request to get an available player slot
     RequestFreePlayer(oneshot::Sender<Option<Player>>),
 }
 
+/// The Main Server Logic
+///
+/// The `Server` struct runs in its own thread and orchestrates the game.
+/// It manages client connections, tracks game state, and handles the flow of the game.
 #[derive(Debug)]
 pub struct Server {
     // Channel to receive messages from the main thread
     main_rx: mpsc::Receiver<MainThreadMessage>,
-    // Clients list
+    // Clients list - Active connections to players
     clients_tx: HashMap<Player, mpsc::Sender<ServerMessage>>,
-    // Session management
+    // Session management - Maps Session IDs to Players
     sessions: HashMap<Uuid, Player>,
-    // Disconnected players with active sessions
+    // Disconnected players with active sessions - Players who dropped off but can reconnect
     disconnected: HashSet<Player>,
     // Channel for broadcasting messages to all local client threads
     broadcast_tx: broadcast::Sender<ServerBroadcast>,
@@ -63,6 +74,9 @@ impl Server {
     }
 
     /// Wait for all players to connect
+    ///
+    /// This function blocks until the required number of players have connected.
+    /// It handles incoming connections and assigns player slots (P1, P2, etc.).
     async fn wait_players_connect(&mut self, n_players: usize) -> Result<()> {
         while self.clients_tx.len() < n_players {
             // Wait for message from main thread
@@ -117,6 +131,10 @@ impl Server {
         Ok(())
     }
 
+    /// Disconnects all players
+    ///
+    /// Gracefully shuts down connections by sending a broadcast disconnect signal
+    /// and waiting for clients to acknowledge/close.
     async fn disconnect_players(&mut self) -> Result<()> {
         let _ = self
             .broadcast_tx
@@ -157,6 +175,14 @@ impl Server {
         Ok(())
     }
 
+    /// Coordinates a single turn in the game
+    ///
+    /// 1. Calculates available moves for the current player.
+    /// 2. Sends the list of moves to the player.
+    /// 3. Waits for the player's response (choice).
+    /// 4. Validates the choice.
+    /// 5. Applies the move to the game state.
+    /// 6. Broadcasts the move to all players.
     async fn handle_turn(&mut self, game: &mut Game, current_player: Player) -> Result<GameStatus> {
         log::debug!("Player {current_player} turn");
 
@@ -292,6 +318,13 @@ impl Server {
         }
     }
 
+    /// Runs the main game loop
+    ///
+    /// Manages the state machine of the game:
+    /// - Loops until the game finishes or max turns reached.
+    /// - Checks for game end conditions.
+    /// - Delegates turn handling to `handle_turn`.
+    /// - Updates game timer and logs progress.
     async fn game_loop(&mut self, max_turns: usize) -> Result<GameResult> {
         // Create game
         let mut game = Game::new();
@@ -363,6 +396,10 @@ impl Server {
     }
 
     /// Main server thread loop
+    ///
+    /// 1. Waits for players to connect.
+    /// 2. Runs the game loop.
+    /// 3. Broadcasts the game result.
     async fn run(&mut self, timeout: Duration, max_turns: usize) -> Result<()> {
         log::trace!("Server thread started");
 
@@ -420,6 +457,9 @@ impl Server {
     }
 
     /// Server thread run wrapper
+    ///
+    /// Entry point for the server thread.
+    /// Runs the server and ensures all players are disconnected when it finishes.
     pub async fn try_run(mut self, timeout: Duration, max_turns: usize) -> Result<()> {
         // Attempt to run server
         let result = self.run(timeout, max_turns).await;

@@ -12,26 +12,34 @@ use crate::{
 use super::messages::{ClientMessage, ClientRequest, ServerBroadcast, ServerMessage};
 
 // Transport abstraction
+/// Value trait object for sending messages to the remote client
 pub type ClientSink = Pin<Box<dyn Sink<RemoteOutMessage, Error = anyhow::Error> + Send + Unpin>>;
+/// Value trait object for receiving messages from the remote client
 pub type ClientStream =
     Pin<Box<dyn Stream<Item = Result<RemoteInMessage, anyhow::Error>> + Send + Unpin>>;
 
+/// Representation of a connected client in the server
+///
+/// This struct manages the state and communication for a single connected player.
+/// It runs in its own thread (tokio task) and acts as an intermediary between
+/// the remote client (via TCP) and the main server logic (via mpsc channels).
 pub struct Client {
     /// Player assigned to client
     player: Player,
-    /// Sink for messages to remote client
+    /// Sink for messages to remote client (TCP Output)
     sink: ClientSink,
-    /// Stream of messages from remote client
+    /// Stream of messages from remote client (TCP Input)
     stream: ClientStream,
-    /// Receiver for direct message from the server
+    /// Receiver for direct message from the server (Server -> Client)
     server_rx: mpsc::Receiver<ServerMessage>,
-    /// Receiver for messages broadcast by the server
+    /// Receiver for messages broadcast by the server (Server -> All Clients)
     broadcast_rx: broadcast::Receiver<ServerBroadcast>,
-    /// Sender for messages to the server thread
+    /// Sender for messages to the server thread (Client -> Server)
     client_tx: mpsc::Sender<ClientMessage>,
 }
 
 impl Client {
+    /// Creates a new Client instance
     pub fn new(
         player: Player,
         sink: ClientSink,
@@ -52,6 +60,7 @@ impl Client {
         })
     }
 
+    /// Sends a message to the remote client via the TCP connection
     async fn send_remote_message(&mut self, message: RemoteOutMessage) -> Result<()> {
         log::debug!(
             "[Player {}] Sending remote message: {message:?}",
@@ -64,13 +73,14 @@ impl Client {
             .with_context(|| "Failed to send remote message")
     }
 
+    /// Sends a request to the main server thread
     async fn send_request(&mut self, request: ClientRequest) -> Result<()> {
         log::debug!(
             "[Player {}] Sending request to server: {request:?}",
             self.player
         );
 
-        // Package message
+        // Package message with player identity
         let message = ClientMessage {
             player: self.player,
             request,
@@ -83,6 +93,7 @@ impl Client {
             .with_context(|| "Failed to send message to server")
     }
 
+    /// Handles an incoming message from the remote client (TCP)
     async fn handle_remote_message(&mut self, message: RemoteInMessage) -> Result<()> {
         log::debug!(
             "[Player {}] Handling remote message: {message:?}",
@@ -90,22 +101,28 @@ impl Client {
         );
 
         match message {
+            // Forward player choice to the server
             RemoteInMessage::Choice { movement_index } => self
                 .send_request(ClientRequest::Choice { movement_index })
                 .await
                 .with_context(|| "Unable to forward message to server"),
-            _ => Ok(()), // Handshake handled separately
+            _ => Ok(()), // Handshake handled separately during connection phase
         }
     }
 
+    /// Handles a broadcast message from the server
+    ///
+    /// These messages are sent to all connected clients (e.g., game updates).
     async fn handle_server_broadcast(&mut self, message: ServerBroadcast) -> Result<()> {
         log::debug!("[Player {}] Received broadcast: {message:?}", self.player);
 
         match message {
+            // Server is shutting down or resetting
             ServerBroadcast::Disconnect => {
                 self.send_remote_message(RemoteOutMessage::Disconnect)
                     .await?;
             }
+            // A player made a move, update remote client
             ServerBroadcast::Movement {
                 player,
                 movement,
@@ -118,6 +135,7 @@ impl Client {
                 })
                 .await?;
             }
+            // Game has ended
             ServerBroadcast::GameFinished { result } => {
                 self.send_remote_message(RemoteOutMessage::GameFinished { result })
                     .await?;
@@ -127,10 +145,14 @@ impl Client {
         Ok(())
     }
 
+    /// Handles a direct message from the server
+    ///
+    /// These messages are specific to this client (e.g., "It's your turn").
     async fn handle_server_message(&mut self, message: ServerMessage) -> Result<()> {
         log::debug!("[Player {}] Received message: {message:?}", self.player);
 
         match message {
+            // It is this player's turn
             ServerMessage::Turn { movements } => {
                 self.send_remote_message(RemoteOutMessage::Turn { movements })
                     .await?;
@@ -141,6 +163,12 @@ impl Client {
     }
 
     /// Client thread main loop
+    ///
+    /// This method runs indefinitely until the client disconnects or an error occurs.
+    /// It multiplexes events from:
+    /// 1. Messages from the main server thread (Direct)
+    /// 2. Broadcasts from the main server thread (Broadcast)
+    /// 3. Messages from the remote client (Network)
     pub async fn run(&mut self) -> Result<()> {
         log::trace!("[Player {}] Task spawned", self.player);
 
@@ -154,7 +182,7 @@ impl Client {
         loop {
             tokio::select! {
 
-                // Incoming message from server
+                // Incoming message from server (Direct)
                 server_message = self.server_rx.recv() => {
                     match server_message {
                         None => bail!("Server message channel closed"),
@@ -166,7 +194,7 @@ impl Client {
 
                 }
 
-                // Incoming broadcast from the server
+                // Incoming broadcast from the server (Broadcast)
                 broadcast = self.broadcast_rx.recv() => {
                     match broadcast {
                         Err(broadcast::error::RecvError::Closed) => {
@@ -182,7 +210,7 @@ impl Client {
                     }
                 }
 
-                // Incoming messages from remote client
+                // Incoming messages from remote client (Network)
                 remote_message = self.stream.next() => {
                     log::debug!("[Player {}] New message from remote client",self.player);
                     match remote_message {

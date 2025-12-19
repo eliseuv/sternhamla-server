@@ -18,7 +18,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, future};
 use sternhalma_server::server::{
     MainThreadMessage, Server,
     client::{Client, ClientSink, ClientStream},
@@ -42,17 +42,29 @@ struct Args {
     /// Maximum number of turns
     #[arg(short = 'n', long, value_name = "N")]
     max_turns: usize,
-    #[arg(short, long, value_name = "SECONDS", default_value_t = 30)]
+    #[arg(short, long, value_name = "SECONDS", default_value_t = 300)]
     timeout: u64,
 }
 
+/// Shared state for the application
+/// This state is cloned and passed to new connections (both TCP and WebSocket)
 #[derive(Clone)]
 struct AppState {
+    /// Channel to send messages to the main Game/Server loop
     main_tx: mpsc::Sender<MainThreadMessage>,
+    /// Channel to send messages from Clients to the Server
     client_msg_tx: mpsc::Sender<ClientMessage>,
+    /// Channel for the Server to broadcast messages to all Clients
     server_broadcast_tx: broadcast::Sender<ServerBroadcast>,
 }
 
+/// Handles the initial handshake with a client (both TCP and WebSocket).
+///
+/// This function:
+/// 1. Waits for a `Hello` (new session) or `Reconnect` message.
+/// 2. Contacts the main Server thread to request a player slot or validate a session.
+/// 3. Sends a welcome message (or rejection) to the client.
+/// 4. If successful, spawns a `Client` task to handle the connection for the duration of the game.
 async fn handle_handshake(mut stream: ClientStream, mut sink: ClientSink, app_state: AppState) {
     let AppState {
         main_tx,
@@ -206,10 +218,18 @@ async fn handle_handshake(mut stream: ClientStream, mut sink: ClientSink, app_st
     };
 }
 
+/// Axum handler for WebSocket upgrades.
+/// Upgrades the HTTP connection to a WebSocket connection.
 async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_ws(socket, state))
 }
 
+/// Handles the WebSocket connection.
+///
+/// This function acts as an adapter, converting the WebSocket stream (of `Message::Binary`)
+/// into the `RemoteInMessage` and `RemoteOutMessage` types used by the core server logic.
+/// It effectively wraps the WebSocket in the same interface as the TCP connection (`ClientSink` / `ClientStream`)
+/// and then delegates to `handle_handshake`.
 async fn handle_ws(socket: WebSocket, state: AppState) {
     let (ws_write, ws_read) = socket.split();
 
@@ -245,8 +265,6 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
     handle_handshake(stream, sink, state).await;
 }
 
-use futures::future;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logger
@@ -257,20 +275,28 @@ async fn main() -> Result<()> {
     log::debug!("Command line arguments: {args:?}");
     let timeout = Duration::from_secs(args.timeout);
 
+    // --- Channel Setup ---
+    // The server architecture relies on message passing between threads/tasks.
+
     // Client threads -> Server thread
+    // Used for active game actions (move, disconnect)
     let (client_msg_tx, client_msg_rx) = mpsc::channel::<ClientMessage>(LOCAL_CHANNEL_CAPACITY);
 
     // Server thread -> Client threads
+    // Used for broadcasting common information (move updates, game finish)
     let (server_broadcast_tx, _server_broadcast_rx) =
         broadcast::channel::<ServerBroadcast>(LOCAL_CHANNEL_CAPACITY);
 
     // Main thread -> Server thread
+    // Used for connection establishment (handshake requests)
     let (main_tx, main_rx) = mpsc::channel::<MainThreadMessage>(LOCAL_CHANNEL_CAPACITY);
 
     // Channel for the server thread to send shutdown signal to main thread
+    // If the server logic fails or finishes, it triggers a full application shutdown.
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    // Spawn the server task
+    // --- Spawn Game Server ---
+    // The `Server` struct runs in its own task and manages the game logic.
     let server = Server::new(main_rx, client_msg_rx, server_broadcast_tx.clone())
         .with_context(|| "Failed to create server")?;
     tokio::spawn(async move {
@@ -281,20 +307,22 @@ async fn main() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
-    // App State
+    // App State held by connection handlers
     let app_state = AppState {
         main_tx: main_tx.clone(),
         client_msg_tx,
         server_broadcast_tx,
     };
 
-    // Bind TCP listener to the socket address
+    // --- Start Listeners ---
+
+    // 1. TCP Listener (Raw protocol)
     let listener = TcpListener::bind(&args.socket)
         .await
         .with_context(|| "Failed to bind listener to socket")?;
     log::info!("Listening (TCP) at {socket:?}", socket = args.socket);
 
-    // Axum server
+    // 2. WebSocket Listener (Web Clients)
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .layer(tower_http::cors::CorsLayer::permissive())
