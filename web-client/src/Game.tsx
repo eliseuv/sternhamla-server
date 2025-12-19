@@ -117,22 +117,6 @@ export function Game({ url, onLeave }: GameProps) {
         PLAYER1_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'Player1'));
         PLAYER2_STARTING_POSITIONS.forEach(([i, j]) => initialMap.set(`${i},${j}`, 'Player2'));
         setBoardState(initialMap);
-
-        // MOCK SIMULATION (Leaving this as it was in App.tsx, though it might be good to remove if not needed anymore)
-        setTimeout(() => {
-            console.log("SIMULATING MOVE");
-            const start = PLAYER1_STARTING_POSITIONS[0];
-            const end = [start[0], start[1] - 1] as [number, number];
-
-            const mockMsg: RemoteOutMessage = {
-                type: 'movement',
-                player: 'Player1',
-                movement: [start, end],
-                scores: [0, 0]
-            };
-            handleMessage(mockMsg);
-        }, 5000);
-
     }, []);
 
     useEffect(() => {
