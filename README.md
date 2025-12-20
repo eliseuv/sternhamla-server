@@ -67,7 +67,7 @@ Due to its asynchronous nature, the server handles I/O efficiently, sleeping whe
 graph TD
     subgraph "Sternhalma Server Process"
         Main[Main Listener]
-        Server[Server Task (Game Logic)]
+        Server["Server Task (Game Logic)"]
         
         subgraph "Client Tasks"
             C1[Client Task 1]
