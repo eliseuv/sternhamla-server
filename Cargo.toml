@@ -25,6 +25,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 # Logging
 log = "0.4"
 env_logger = "0.11"
+humansize = "2"
 
 # Error handling
 thiserror = "2"

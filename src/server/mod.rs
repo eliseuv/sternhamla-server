@@ -27,7 +27,7 @@ use crate::sternhalma::{
     timing::GameTimer,
 };
 
-use crate::utils::bytes_sizes::ByteSize;
+use humansize::{BINARY, format_size};
 
 pub mod client;
 pub mod handshake;
@@ -389,7 +389,7 @@ impl Server {
                     // Update timing
                     game_timer.on_trigger(&game, |timer| {
                         // Calculate size of game history in memory
-                        let hist_size: ByteSize = game.history_bytes().into();
+                        let hist_size = format_size(game.history_bytes(), BINARY);
                         // Log information
                         log::info!(
                             "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
