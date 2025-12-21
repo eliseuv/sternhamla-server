@@ -8,7 +8,7 @@ use anyhow::Result;
 use crate::sternhalma::board::player::Player;
 
 /// Length of the Sternhalma board
-const BOARD_LENGTH: usize = 17;
+pub const BOARD_LENGTH: usize = 17;
 
 /// Board position:
 /// `None`: Invalid position (outside of the board)

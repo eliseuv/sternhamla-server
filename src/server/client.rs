@@ -6,7 +6,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::{
     server::protocol::{RemoteInMessage, RemoteOutMessage},
-    sternhalma::board::player::Player,
+    sternhalma::board::{BOARD_LENGTH, HexIdx, movement::MovementIndices, player::Player},
 };
 
 use super::messages::{ClientMessage, ClientRequest, ServerBroadcast, ServerMessage};
@@ -58,6 +58,19 @@ impl Client {
             broadcast_rx,
             client_tx,
         })
+    }
+
+    /// Transforms an absolute index to a relative index for the client
+    fn relative_idx(&self, idx: HexIdx) -> HexIdx {
+        match self.player {
+            Player::Player1 => idx,
+            Player::Player2 => idx.map(|c| BOARD_LENGTH - 1 - c),
+        }
+    }
+
+    /// Transforms an absolute movement to a relative movement for the client
+    fn relative_movement(&self, movement: MovementIndices) -> MovementIndices {
+        movement.map(|idx| self.relative_idx(idx))
     }
 
     /// Sends a message to the remote client via the TCP connection
@@ -130,7 +143,7 @@ impl Client {
             } => {
                 self.send_remote_message(RemoteOutMessage::Movement {
                     player,
-                    movement,
+                    movement: self.relative_movement(movement),
                     scores,
                 })
                 .await?;
@@ -154,6 +167,10 @@ impl Client {
         match message {
             // It is this player's turn
             ServerMessage::Turn { movements } => {
+                let movements = movements
+                    .into_iter()
+                    .map(|m| self.relative_movement(m))
+                    .collect();
                 self.send_remote_message(RemoteOutMessage::Turn { movements })
                     .await?;
             }
