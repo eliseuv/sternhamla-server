@@ -158,12 +158,12 @@ cargo test
   * Tests the robustness of the session management.
   * Verifies that a player can disconnect and reconnect with their session ID to resume the game without losing state.
 
-## Usage
+### Usage
 
-The server executable is `sternhalma-server`.
+The server executable is `sternhalma-server`. It can listen on **Raw TCP**, **WebSocket**, or **both simultaneously**.
 
 ```bash
-sternhalma-server --max-turns <N> <--tcp <ADDRESS>|--ws <ADDRESS>>
+sternhalma-server --max-turns <N> [--tcp <ADDRESS>] [--ws <ADDRESS>]
 ```
 
 ### Arguments

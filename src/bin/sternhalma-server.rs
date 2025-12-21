@@ -32,7 +32,6 @@ const LOCAL_CHANNEL_CAPACITY: usize = 32;
 /// Command line arguments
 #[derive(Debug, Parser)]
 #[command(name = "sternhalma-server", version, about)]
-#[command(group(clap::ArgGroup::new("listener").required(true).args(["tcp", "ws"])))]
 struct Args {
     /// Host IP address for Raw TCP
     #[arg(long, value_name = "ADDRESS")]
@@ -314,6 +313,16 @@ async fn main() -> Result<()> {
 
     // --- Start Listener ---
 
+    if args.tcp.is_none() && args.ws.is_none() {
+        use clap::CommandFactory;
+        let mut cmd = Args::command();
+        cmd.error(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "Either --tcp or --ws must be provided",
+        )
+        .exit();
+    }
+
     if let Some(addr) = args.tcp {
         // 1. TCP Listener (Raw protocol)
         let listener = TcpListener::bind(&addr)
@@ -321,33 +330,29 @@ async fn main() -> Result<()> {
             .with_context(|| "Failed to bind listener to socket")?;
         log::info!("Listening (TCP) at {addr}");
 
-        tokio::select! {
-             // TCP Connections loop
-            _ = async {
-                loop {
-                    match listener.accept().await {
-                        Err(e) => {
-                            log::error!("Failed to accept connection: {e:?}");
-                            continue;
-                        }
-                        Ok((stream, _addr)) => {
-                            let framed = Framed::new(stream, ServerCodec::new());
-                            let (write, read) = framed.split();
-                            let sink: ClientSink = Box::pin(write.sink_map_err(|e| anyhow::anyhow!(e)));
-                            let stream: ClientStream = Box::pin(read.map(|msg| msg.map_err(|e| anyhow::anyhow!(e))));
+        let app_state = app_state.clone();
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Err(e) => {
+                        log::error!("Failed to accept connection: {e:?}");
+                        continue;
+                    }
+                    Ok((stream, _addr)) => {
+                        let framed = Framed::new(stream, ServerCodec::new());
+                        let (write, read) = framed.split();
+                        let sink: ClientSink = Box::pin(write.sink_map_err(|e| anyhow::anyhow!(e)));
+                        let stream: ClientStream =
+                            Box::pin(read.map(|msg| msg.map_err(|e| anyhow::anyhow!(e))));
 
-                            tokio::spawn(handle_handshake(stream, sink, app_state.clone()));
-                        }
+                        tokio::spawn(handle_handshake(stream, sink, app_state.clone()));
                     }
                 }
-            } => {},
-
-            // Shutdown signal
-             _ = shutdown_rx => {
-                log::trace!("Shutdown signal received");
             }
-        }
-    } else if let Some(addr) = args.ws {
+        });
+    }
+
+    if let Some(addr) = args.ws {
         // 2. WebSocket Listener (Web Clients)
         let app = Router::new()
             .route("/ws", get(ws_handler))
@@ -357,18 +362,16 @@ async fn main() -> Result<()> {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         log::info!("Listening (WS) at {addr}");
 
-        // Using axum's graceful shutdown
-        // We need to map the shutdown_rx (oneshot) to a future that completes when the signal is received
-        // Note: shutdown_rx consumes the channel.
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                shutdown_rx.await.ok();
-            })
-            .await
-        {
-            log::error!("Axum server error: {e}");
-        }
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                log::error!("Axum server error: {e}");
+            }
+        });
     }
+
+    // Wait for shutdown signal
+    shutdown_rx.await.ok();
+    log::trace!("Shutdown signal received");
 
     Ok(())
 }
