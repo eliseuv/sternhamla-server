@@ -15,8 +15,6 @@ async fn test_gameplay_turn_and_move() {
         .await
         .expect("Failed to send Hello 1");
     let _welcome1 = client1.recv().await.expect("Failed to receive Welcome 1");
-    // Consume Assign message
-    let _assign1 = client1.recv().await.expect("Failed to receive Assign 1");
 
     // Connect Player 2
     let mut client2 = server.client().await.expect("Failed to connect client 2");
@@ -25,8 +23,6 @@ async fn test_gameplay_turn_and_move() {
         .await
         .expect("Failed to send Hello 2");
     let _welcome2 = client2.recv().await.expect("Failed to receive Welcome 2");
-    // Consume Assign message
-    let _assign2 = client2.recv().await.expect("Failed to receive Assign 2");
 
     // Player 1 should receive Turn
     // Note: It might take a moment for game to start after players connect
@@ -80,9 +76,12 @@ async fn test_gameplay_turn_and_move() {
             },
         ) => {
             assert_eq!(p1, Player::Player1);
-            assert_eq!(p2, Player::Player1);
+            // Relative to Player 2, Player 1 is "Player 2" (opponent)
+            assert_eq!(p2, Player::Player2);
             assert_eq!(m1, expected_move);
-            assert_eq!(m2, expected_move);
+            // Player 2 sees relative movement
+            let relative_move = expected_move.map(|idx| idx.map(|c| 17 - 1 - c));
+            assert_eq!(m2, relative_move);
             scores
         }
         (m1, m2) => panic!("Expected Movement messages, got: {:?} and {:?}", m1, m2),

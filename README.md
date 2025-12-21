@@ -127,9 +127,9 @@ All messages are strictly typed and use the `snake_case` convention.
 
 #### RemoteOutMessage (Server -> Client)
 
-* `{ "type": "welcome", "session_id": "UUID_STRING", "player": "Player1" | "Player2" }`: Successful connection/reconnection.
+* `{ "type": "welcome", "session_id": "UUID_STRING" }`: Successful connection/reconnection.
 * `{ "type": "reject", "reason": "STRING" }`: Connection/reconnection failed.
-* `{ "type": "assign", "player": "Player1" | "Player2" }`: Informational message assigning a player identity.
+
 * `{ "type": "disconnect" }`: Server is shutting down the session.
 * `{ "type": "turn", "movements": [ [ [q1, r1], [q2, r2] ], ... ] }`: It is your turn. Contains a list of valid moves (start and end hex coordinates).
 * `{ "type": "movement", "player": "Player1" | "Player2", "movement": [[q1, r1], [q2, r2]], "scores": [s1, s2] }`: Broadcast of a valid move made by a player.

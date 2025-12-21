@@ -1,7 +1,6 @@
 use assert_matches::assert_matches;
 use common::TestServer;
 use sternhalma_server::server::protocol::{RemoteInMessage, RemoteOutMessage};
-use sternhalma_server::sternhalma::board::player::Player;
 
 mod common;
 
@@ -22,10 +21,7 @@ async fn test_successful_connection_and_handshake() {
     // Expect Welcome
     let msg = client.recv().await.expect("Failed to receive response");
     match msg {
-        RemoteOutMessage::Welcome {
-            session_id: _,
-            player,
-        } => assert_eq!(player, Player::Player1),
+        RemoteOutMessage::Welcome { session_id: _ } => {}
         _ => panic!("Expected Welcome message"),
     };
 }
@@ -42,10 +38,7 @@ async fn test_multiple_players_connection() {
         .expect("Failed to send Hello 1");
     let msg1 = client1.recv().await.expect("Failed to receive response 1");
     match msg1 {
-        RemoteOutMessage::Welcome {
-            session_id: _,
-            player,
-        } => assert_eq!(player, Player::Player1),
+        RemoteOutMessage::Welcome { session_id: _ } => {}
         other => panic!("Unexpected message for client 1: {:?}", other),
     }
 
@@ -57,10 +50,7 @@ async fn test_multiple_players_connection() {
         .expect("Failed to send Hello 2");
     let msg2 = client2.recv().await.expect("Failed to receive response 2");
     match msg2 {
-        RemoteOutMessage::Welcome {
-            session_id: _,
-            player,
-        } => assert_eq!(player, Player::Player2),
+        RemoteOutMessage::Welcome { session_id: _ } => {}
         other => panic!("Unexpected message for client 2: {:?}", other),
     }
 }

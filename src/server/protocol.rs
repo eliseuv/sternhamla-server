@@ -20,16 +20,17 @@ pub const REMOTE_MESSAGE_LENGTH: usize = 4 * 1024;
 pub enum RemoteOutMessage {
     /// Welcome message with session ID
     ///
-    /// Sent immediately after connection to assign a session ID and player identity.
-    Welcome { session_id: Uuid, player: Player },
+    /// Sent immediately after connection to assign a session ID.
+    ///
+    /// # Design Decision
+    /// The player identity is NOT sent here because the protocol ensures every client
+    /// sees themselves as `Player1`. The server handles the mapping to the actual
+    /// internal player identity.
+    Welcome { session_id: Uuid },
     /// Reconnect reject
     ///
     /// Sent if a reconnection attempt fails (e.g., invalid session ID).
     Reject { reason: String },
-    /// Inform remote client about their assigned player
-    ///
-    /// Sent to confirm which player the client is controlling (e.g. Player1 or Player2).
-    Assign { player: Player },
     /// Disconnection signal
     ///
     /// Sent to serve as a polite "goodbye" before closing the connection.

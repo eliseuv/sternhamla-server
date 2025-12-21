@@ -104,10 +104,7 @@ async fn handle_handshake(mut stream: ClientStream, mut sink: ClientSink, app_st
                     log::info!("New client assigned: {player} (Session: {session_id})");
 
                     // Send Welcome
-                    if let Err(e) = sink
-                        .send(RemoteOutMessage::Welcome { session_id, player })
-                        .await
-                    {
+                    if let Err(e) = sink.send(RemoteOutMessage::Welcome { session_id }).await {
                         log::error!("Failed to send Welcome: {e}");
                         return;
                     }
@@ -169,10 +166,7 @@ async fn handle_handshake(mut stream: ClientStream, mut sink: ClientSink, app_st
                 Ok(Some(player)) => {
                     // Ack
                     if let Err(e) = sink
-                        .send(RemoteOutMessage::Welcome {
-                            session_id: uuid,
-                            player,
-                        })
+                        .send(RemoteOutMessage::Welcome { session_id: uuid })
                         .await
                     {
                         log::error!("Failed to send Welcome: {e}");

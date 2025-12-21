@@ -60,7 +60,24 @@ impl Client {
         })
     }
 
+    /// Transforms an absolute player to a relative player for the client
+    ///
+    /// # Design Decision
+    /// The protocol uses relative player identities so that every client views themselves
+    /// as `Player1` (at the bottom) and the opponent as `Player2` (at the top).
+    /// This simplifies client-side logic by providing a consistent perspective.
+    fn relative_player(&self, player: Player) -> Player {
+        match self.player {
+            Player::Player1 => player,
+            Player::Player2 => player.opponent(),
+        }
+    }
+
     /// Transforms an absolute index to a relative index for the client
+    ///
+    /// # Design Decision
+    /// See `relative_player`. Coordinates are rotated 180 degrees for Player 2
+    /// so they effectively play from the "bottom" perspective as well.
     fn relative_idx(&self, idx: HexIdx) -> HexIdx {
         match self.player {
             Player::Player1 => idx,
@@ -141,8 +158,13 @@ impl Client {
                 movement,
                 scores,
             } => {
+                // Transform scores to match the relative player perspective
+                let scores = match self.player {
+                    Player::Player1 => scores,
+                    Player::Player2 => [scores[1], scores[0]],
+                };
                 self.send_remote_message(RemoteOutMessage::Movement {
-                    player,
+                    player: self.relative_player(player),
                     movement: self.relative_movement(movement),
                     scores,
                 })
@@ -150,6 +172,36 @@ impl Client {
             }
             // Game has ended
             ServerBroadcast::GameFinished { result } => {
+                let result = match result {
+                    crate::sternhalma::GameResult::Finished {
+                        winner,
+                        total_turns,
+                        scores,
+                    } => {
+                        let scores = match self.player {
+                            Player::Player1 => scores,
+                            Player::Player2 => [scores[1], scores[0]],
+                        };
+                        crate::sternhalma::GameResult::Finished {
+                            winner: self.relative_player(winner),
+                            total_turns,
+                            scores,
+                        }
+                    }
+                    crate::sternhalma::GameResult::MaxTurns {
+                        total_turns,
+                        scores,
+                    } => {
+                        let scores = match self.player {
+                            Player::Player1 => scores,
+                            Player::Player2 => [scores[1], scores[0]],
+                        };
+                        crate::sternhalma::GameResult::MaxTurns {
+                            total_turns,
+                            scores,
+                        }
+                    }
+                };
                 self.send_remote_message(RemoteOutMessage::GameFinished { result })
                     .await?;
             }
@@ -189,12 +241,7 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         log::trace!("[Player {}] Task spawned", self.player);
 
-        // Send player assignment message to remote client
-        self.send_remote_message(RemoteOutMessage::Assign {
-            player: self.player,
-        })
-        .await
-        .with_context(|| "Falied to send player assignment message to remote client")?;
+        log::trace!("[Player {}] Task spawned", self.player);
 
         loop {
             tokio::select! {

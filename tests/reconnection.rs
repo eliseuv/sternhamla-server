@@ -18,15 +18,9 @@ async fn test_reconnection() {
     let msg_welcome = client1.recv().await.expect("Failed to receive Welcome 1");
 
     let session_id = match msg_welcome {
-        RemoteOutMessage::Welcome { session_id, player } => {
-            assert_eq!(player, Player::Player1);
-            session_id
-        }
+        RemoteOutMessage::Welcome { session_id } => session_id,
         other => panic!("Expected Welcome, got: {:?}", other),
     };
-
-    // Consume Assign
-    let _assign = client1.recv().await.expect("Failed to receive Assign 1");
 
     // Connect Client 2 to start game
     let mut client2 = server.client().await.expect("Failed to connect client 2");
@@ -35,7 +29,6 @@ async fn test_reconnection() {
         .await
         .expect("Failed to send Hello 2");
     let _ = client2.recv().await.expect("Failed to receive Welcome 2");
-    let _ = client2.recv().await.expect("Failed to receive Assign 2");
 
     // Client 1 receives Turn (wait for it to be sure game started)
     let _turn = client1
@@ -64,19 +57,12 @@ async fn test_reconnection() {
     match msg {
         RemoteOutMessage::Welcome {
             session_id: new_sid,
-            player: _,
         } => {
             assert_eq!(session_id, new_sid, "Session ID should match");
         }
         RemoteOutMessage::Reject { reason } => panic!("Reconnection rejected: {}", reason),
         other => panic!("Unexpected message after reconnect: {:?}", other),
     }
-
-    // Should receive Assign again
-    let _assign = client1_new
-        .recv()
-        .await
-        .expect("Failed to receive Assign after reconnect");
 
     // Should receive Turn again?
     // According to server logic, if it was My Turn, and I reconnect, server resends Turn.

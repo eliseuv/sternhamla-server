@@ -29,7 +29,7 @@ The server supports two transport methods, which differ in how messages are fram
 3. **Server Responds**:
     * `Welcome`: Connection accepted, session ID assigned.
     * `Reject`: Connection refused (e.g., server full, invalid session).
-4. If accepted, Server may send `Assign` to confirm player identity (Player1/Player2).
+4. If accepted, Client is now ready to play. Note that the Client ALWAYS sees itself as "Player1".
 
 ### Game Loop
 
@@ -101,8 +101,7 @@ Session established successfully.
 ```json
 {
   "type": "welcome",
-  "session_id": "UUID-STRING",
-  "player": "player1" // or "player2"
+  "session_id": "UUID-STRING"
 }
 ```
 
@@ -114,17 +113,6 @@ Connection rejected.
 {
   "type": "reject",
   "reason": "Server full"
-}
-```
-
-### Assign
-
-Confirm player identity.
-
-```json
-{
-  "type": "assign",
-  "player": "player1"
 }
 ```
 
