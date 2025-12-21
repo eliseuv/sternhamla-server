@@ -15,8 +15,10 @@ use crate::sternhalma::{
 };
 
 pub mod client;
+pub mod handshake;
 pub mod messages;
 pub mod protocol;
+pub mod ws;
 
 use messages::{ClientMessage, ClientRequest, ServerBroadcast, ServerMessage};
 
