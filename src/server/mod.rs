@@ -27,6 +27,8 @@ use crate::sternhalma::{
     timing::GameTimer,
 };
 
+use crate::utils::bytes_sizes::ByteSize;
+
 pub mod client;
 pub mod handshake;
 pub mod messages;
@@ -344,9 +346,6 @@ impl Server {
         // Create game
         let mut game = Game::new();
 
-        // Print initial board state
-        println!("{game}");
-
         // Game timer
         let mut game_timer = GameTimer::<256>::new();
 
@@ -387,24 +386,20 @@ impl Server {
                         .await
                         .with_context(|| "Falied to handle game turn")?;
 
-                    // // Update timing
-                    // game_timer.on_trigger(&game, |timer| {
-                    //     // Calculate size of game history in memory
-                    //     let hist_size: ByteSize = game.history_bytes().into();
-                    //     // Log information
-                    //     log::info!(
-                    //         "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
-                    //         turns = game.status().turns(),
-                    //         rate = timer.turns_rate(),
-                    //     )
-                    // });
+                    // Update timing
+                    game_timer.on_trigger(&game, |timer| {
+                        // Calculate size of game history in memory
+                        let hist_size: ByteSize = game.history_bytes().into();
+                        // Log information
+                        log::info!(
+                            "Turns: {turns} | Rate: {rate:.2} turn/s | History: {hist_size}",
+                            turns = game.status().turns(),
+                            rate = timer.turns_rate(),
+                        )
+                    });
 
                     // Print board state
-                    game_timer.update(&game);
-                    println!(
-                        "{game} | Rate: {rate:.2} turn/s",
-                        rate = game_timer.turns_rate(),
-                    );
+                    log::debug!("\n{game}");
                 }
             }
         }
