@@ -1,3 +1,17 @@
+//! # Board Module
+//!
+//! This module implements the logical representation of the Sternhalma board.
+//! It handles grid storage, coordinate systems, and basic board operations.
+//!
+//! ## Hexagonal Grid
+//! The board uses an axial coordinate system for the hexagonal grid.
+//! Indices are represented as `[q, r]` (see [`HexIdx`]).
+//!
+//! ## Key Components
+//! - [`Board`]: The generic board structure holding pieces.
+//! - [`HexIdx`]: Type alias for hexagonal coordinates.
+//! - [`HexDirection`]: Enum representing the 6 directions on the hex grid.
+
 use std::{
     fmt::{Debug, Display},
     ops::{Index, IndexMut},

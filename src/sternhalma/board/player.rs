@@ -1,3 +1,11 @@
+//! # Player Module
+//!
+//! This module defines the players in the game.
+//! It includes the `Player` enum and related constants.
+//!
+//! ## Key Types
+//! - [`Player`]: Enum representing the two players (Player1, Player2).
+
 use std::fmt::{Debug, Display};
 
 use serde::Serialize;

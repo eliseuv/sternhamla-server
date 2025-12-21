@@ -1,3 +1,13 @@
+//! # Movement Module
+//!
+//! This module defines how pieces move on the Sternhalma board.
+//! It handles the validation of moves, including single steps and hop paths.
+//!
+//! ## Key Types
+//! - [`Movement`]: Enum representing a valid move (Step or Hops).
+//! - [`MovementError`]: Errors that can occur during movement validation.
+//! - [`MovementIndices`]: Compact representation of a movement (start, end).
+
 use std::fmt::Debug;
 
 use anyhow::Result;

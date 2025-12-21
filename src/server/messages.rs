@@ -1,3 +1,12 @@
+//! # Internal Messages Module
+//!
+//! This module defines the message types used for communication between internal threads/tasks.
+//!
+//! ## Message Types
+//! - [`ServerMessage`]: Direct messages from Server to a specific Client.
+//! - [`ServerBroadcast`]: Messages broadcast from Server to all Clients.
+//! - [`ClientMessage`]: Requests from a Client to the Server.
+
 use crate::sternhalma::{
     GameResult, Scores,
     board::{movement::MovementIndices, player::Player},

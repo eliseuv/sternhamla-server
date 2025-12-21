@@ -1,3 +1,9 @@
+//! # WebSocket Module
+//!
+//! This module provides the Axum handler for WebSocket upgrades.
+//! It adapts the WebSocket message stream into the `RemoteInMessage`/`RemoteOutMessage` streams
+//! required by the shared handshake and client logic, allowing WebSockets to reuse the core server infrastructure.
+
 use axum::{
     extract::{
         State,

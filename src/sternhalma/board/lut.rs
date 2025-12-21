@@ -1,3 +1,8 @@
+//! # Look-Up Tables (LUT) Module
+//!
+//! This module contains pre-computed constants and look-up tables for the board.
+//! It includes lists of valid board positions and starting positions for players.
+
 use super::HexIdx;
 
 /// Valid positions of Sternhalma board forming a star

@@ -1,3 +1,12 @@
+//! # Client Module
+//!
+//! This module defines the `Client` struct, which manages a single player's connection.
+//! Each client runs in its own task and handles the translation between:
+//! - **Network Messages** (Protocol): `RemoteInMessage` / `RemoteOutMessage`
+//! - **Internal Messages** (Server): `ClientMessage` / `ServerMessage`
+//!
+//! It also handles coordinate transformation to ensure every player sees themselves as Player 1.
+
 use std::pin::Pin;
 
 use anyhow::{Context, Result, bail};

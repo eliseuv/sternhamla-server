@@ -1,3 +1,14 @@
+//! # Sternhalma Server Binary
+//!
+//! This is the entry point for the Sternhalma Server application.
+//! It parses command-line arguments, initializes the logger, sets up the server thread channels,
+//! and starts the TCP and WebSocket listeners.
+//!
+//! ## Usage
+//! ```sh
+//! sternhalma-server --tcp 0.0.0.0:1234 --ws 0.0.0.0:8080
+//! ```
+
 use std::time::Duration;
 
 use anyhow::{Context, Result};

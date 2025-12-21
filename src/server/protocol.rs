@@ -1,3 +1,15 @@
+//! # Protocol Module
+//!
+//! This module defines the external communication protocol used over the network.
+//! It specifies the messages exchanged with remote clients (via TCP or WebSocket).
+//!
+//! ## Messages
+//! - [`RemoteOutMessage`]: Messages sent from Server to Remote Client.
+//! - [`RemoteInMessage`]: Messages sent from Remote Client to Server.
+//!
+//! ## Codecs
+//! It also includes `tokio_util` codecs ([`ServerCodec`], [`ClientCodec`]) for framing and serialization (CBOR).
+
 use crate::sternhalma::board::{movement::MovementIndices, player::Player};
 use crate::sternhalma::{GameResult, Scores};
 use anyhow::{Context, Result};

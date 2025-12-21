@@ -1,3 +1,15 @@
+//! # Sternhalma Game Module
+//!
+//! This module contains the core game logic for Sternhalma (Chinese Checkers).
+//! It defines the game state, rules, board representation, and victory conditions.
+//!
+//! ## Key Components
+//! - [`Game`]: The main struct representing the game state.
+//! - [`GameStatus`]: Enum representing the current state of the game (Playing, Finished).
+//! - [`GameResult`]: Enum representing the final outcome of a game.
+//! - [`board`]: Submodule containing board-related logic (grid, movement, players).
+//! - [`timing`]: Submodule for game timing and statistics.
+
 use std::fmt::{Debug, Display};
 
 use anyhow::Result;

@@ -1,3 +1,11 @@
+//! # Handshake Module
+//!
+//! This module handles the initial connection phase for both TCP and WebSocket clients.
+//! It implements the `handle_handshake` function, which:
+//! 1. Negotiates a session (New or Reconnect).
+//! 2. Contacts the main server thread to request a player slot.
+//! 3. Spawns the `Client` task upon success.
+
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;

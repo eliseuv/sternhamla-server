@@ -1,3 +1,11 @@
+//! # Game Timing Module
+//!
+//! This module provides utilities for tracking game timing statistics.
+//! It is used to calculate metrics such as turns per second to monitor game performance.
+//!
+//! ## Key Types
+//! - [`GameTimer`]: A timer that measures the duration of turns and calculates the rate.
+
 use tokio::time::Instant;
 
 pub struct GameTimer<const N_TURNS: usize> {

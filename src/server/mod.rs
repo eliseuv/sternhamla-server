@@ -1,3 +1,16 @@
+//! # Server Module
+//!
+//! This module implements the multi-threaded game server.
+//! It orchestrates the game loop, manages client connections, and handles message passing.
+//!
+//! ## Architecture
+//! The server runs in its own thread (`Server::run`) and communicates with:
+//! - **Main Thread**: For connection handling (`MainThreadMessage`).
+//! - **Client Threads**: For per-player communication (`ClientMessage`, `ServerMessage`).
+//!
+//! ## Key Components
+//! - [`Server`]: The central struct managing the game state and player sessions.
+
 use std::{
     collections::{HashMap, HashSet, hash_map},
     time::Duration,

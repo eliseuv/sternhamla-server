@@ -1,3 +1,8 @@
+//! # Byte Sizes Module
+//!
+//! This module provides the `ByteSize` enum for formatting data sizes in a human-readable way.
+//! It supports units from Bytes up to Terabytes.
+
 use std::fmt::Display;
 
 const KILO: usize = 1024;
